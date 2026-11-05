@@ -29,4 +29,5 @@ def setup_logger(name: str = "evidencebridge", level: int = logging.INFO) -> log
     return logger
 
 
+get_logger = setup_logger
 logger = setup_logger()

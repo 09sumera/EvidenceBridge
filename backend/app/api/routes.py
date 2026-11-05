@@ -45,6 +45,10 @@ from app.models.schemas import (
     KarnatakaNearbyHospitalsRequest,
     KarnatakaNearbyHospitalsResponse,
     LocationInsight,
+    OTPSendRequest,
+    OTPSendResponse,
+    OTPVerifyRequest,
+    OTPVerifyResponse,
     SchemeEligibilityEvaluationRequest,
     SchemeEligibilityEvaluationResponse,
     TrustDensityListResponse,
@@ -82,6 +86,7 @@ from app.services.trust_density import trust_density_service
 from app.services.vector_store import vector_store_service
 from app.services.verification import verification_service
 from app.services.karnataka_ml import karnataka_ml_service
+from app.services.otp_service import otp_service
 from app.utils.logger import logger
 
 router = APIRouter()
@@ -333,6 +338,153 @@ async def get_me(current_user: dict = Depends(get_current_user)) -> UserResponse
         created_at=current_user.get("created_at") or datetime.now(timezone.utc),
         hospital_id=current_user.get("hospital_id"),
     )
+
+
+# ---------------------------------------------------------------------------
+# SMTP OTP Authentication Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/auth/otp/send",
+    response_model=OTPSendResponse,
+    summary="Request a 6-digit verification code via SMTP email",
+    description="Generates a cryptographically secure 6-digit OTP passcode and dispatches it via SMTP email.",
+)
+async def send_otp_endpoint(req: OTPSendRequest) -> OTPSendResponse:
+    """Request an OTP verification code via SMTP."""
+    success, message, meta = await otp_service.request_otp(
+        email=req.email,
+        portal=req.portal or "patient",
+        name=req.name,
+        organization=req.organization,
+        purpose=req.purpose or "login",
+    )
+    if not success:
+        # Rate limit or validation failure
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS if "wait" in message.lower() else status.HTTP_400_BAD_REQUEST,
+            detail=message,
+        )
+
+    return OTPSendResponse(
+        success=True,
+        message=message,
+        email=meta["email"],
+        expires_in_seconds=meta.get("expires_in_seconds", 600),
+        resend_cooldown_seconds=meta.get("resend_cooldown_seconds", 30),
+        delivery_method=meta.get("delivery_method", "smtp"),
+        dev_otp=meta.get("dev_otp"),
+    )
+
+
+@router.post(
+    "/auth/otp/verify",
+    response_model=OTPVerifyResponse,
+    summary="Verify OTP passcode and issue authenticated session token",
+    description="Validates the 6-digit one-time passcode and issues a signed JWT access token.",
+)
+async def verify_otp_endpoint(req: OTPVerifyRequest) -> OTPVerifyResponse:
+    """Verify an OTP code and complete authentication."""
+    success, message, user_ctx = await otp_service.verify_otp(
+        email=req.email,
+        code=req.code,
+        portal=req.portal,
+        name=req.name,
+        organization=req.organization,
+    )
+    if not success or not user_ctx:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED if "incorrect" in message.lower() or "expired" in message.lower() else status.HTTP_400_BAD_REQUEST,
+            detail=message,
+        )
+
+    email = user_ctx["email"]
+    portal = user_ctx.get("portal") or "patient"
+    name = user_ctx.get("name") or ("Hospital Billing Desk" if portal == "hospital_management" else "Verified Patient")
+    org = user_ctx.get("organization") or ("Shree Medical Institute" if portal == "hospital_management" else "Personal Health Vault")
+
+    # Check if user already exists in storage
+    user = await storage_service.get_user_by_email(email)
+    now = datetime.now(timezone.utc)
+
+    if not user:
+        user_id = f"usr_{uuid.uuid4().hex[:10]}"
+        role = "HOSPITAL_MANAGEMENT" if portal == "hospital_management" else "PATIENT"
+        hospital_id = "hosp_davg_shree_institute" if role == "HOSPITAL_MANAGEMENT" else None
+
+        user_doc = {
+            "user_id": user_id,
+            "name": name,
+            "email": email,
+            "hashed_password": "",  # Passwordless OTP account
+            "role": role,
+            "organization": org,
+            "hospital_id": hospital_id,
+            "created_at": now,
+        }
+        try:
+            await storage_service.create_user(user_doc)
+            user = user_doc
+        except Exception:
+            # Fallback in case of race condition or in-memory
+            user = await storage_service.get_user_by_email(email) or user_doc
+    else:
+        user_id = user["user_id"]
+        role = user.get("role", "PATIENT")
+        hospital_id = user.get("hospital_id")
+        name = user.get("name", name)
+        org = user.get("organization", org)
+
+    token = create_access_token(
+        user_id=user_id,
+        email=email,
+        name=name,
+        role=role,
+        organization=org,
+        hospital_id=hospital_id,
+    )
+
+    user_resp = UserResponse(
+        user_id=user_id,
+        name=name,
+        email=email,
+        role=role,
+        organization=org,
+        created_at=user.get("created_at") or now,
+        hospital_id=hospital_id,
+    )
+
+    return OTPVerifyResponse(
+        success=True,
+        message="Passcode verified successfully.",
+        access_token=token,
+        token_type="bearer",
+        user=user_resp,
+    )
+
+
+@router.get(
+    "/auth/otp/status",
+    summary="Get SMTP and OTP system configuration status",
+    description="Returns public configuration details of the SMTP OTP dispatch system.",
+)
+async def get_otp_status() -> dict[str, Any]:
+    """Inspect active OTP system status and SMTP relay configuration."""
+    settings = get_settings()
+    has_smtp = bool(settings.SMTP_USERNAME and settings.SMTP_PASSWORD)
+    return {
+        "status": "ready",
+        "smtp_relay": settings.SMTP_HOST,
+        "smtp_port": settings.SMTP_PORT,
+        "smtp_tls": settings.SMTP_TLS,
+        "smtp_ssl": settings.SMTP_SSL,
+        "smtp_configured": has_smtp,
+        "sender_email": settings.SMTP_FROM_EMAIL,
+        "otp_expiry_seconds": settings.OTP_EXPIRATION_SECONDS,
+        "resend_cooldown_seconds": settings.OTP_RESEND_COOLDOWN_SECONDS,
+        "max_attempts": settings.OTP_MAX_ATTEMPTS,
+        "dev_simulation_enabled": settings.OTP_ALLOW_DEV_FALLBACK,
+    }
 
 
 @router.get(

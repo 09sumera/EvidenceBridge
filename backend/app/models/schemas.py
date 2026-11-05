@@ -864,6 +864,56 @@ class AuthResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# SMTP & OTP Authentication Schemas
+# ---------------------------------------------------------------------------
+
+class OTPSendRequest(BaseModel):
+    """Payload to request an OTP verification code via SMTP email."""
+    model_config = ConfigDict(extra="ignore")
+
+    email: str = Field(..., min_length=3, max_length=150, description="Recipient email address")
+    portal: Optional[str] = Field("patient", description="'patient' or 'hospital_management'")
+    name: Optional[str] = Field(None, max_length=120, description="User or hospital name")
+    organization: Optional[str] = Field(None, max_length=150, description="Optional organization name")
+    purpose: Optional[str] = Field("login", description="Purpose: 'login', 'signup', or 'verification'")
+
+
+class OTPSendResponse(BaseModel):
+    """Response returned when an OTP is dispatched via SMTP."""
+    model_config = ConfigDict(extra="ignore")
+
+    success: bool
+    message: str
+    email: str
+    expires_in_seconds: int = 600
+    resend_cooldown_seconds: int = 30
+    delivery_method: str = "smtp"
+    dev_otp: Optional[str] = None
+
+
+class OTPVerifyRequest(BaseModel):
+    """Payload to verify an OTP code and complete authentication."""
+    model_config = ConfigDict(extra="ignore")
+
+    email: str = Field(..., min_length=3, max_length=150, description="Email address the OTP was sent to")
+    code: str = Field(..., min_length=4, max_length=10, description="One-time 6-digit passcode")
+    portal: Optional[str] = Field("patient", description="'patient' or 'hospital_management'")
+    name: Optional[str] = Field(None, max_length=120, description="Display name for account creation if new")
+    organization: Optional[str] = Field(None, max_length=150, description="Organization or hospital name")
+
+
+class OTPVerifyResponse(BaseModel):
+    """Response returned upon successful OTP verification."""
+    model_config = ConfigDict(extra="ignore")
+
+    success: bool
+    message: str
+    access_token: Optional[str] = None
+    token_type: Optional[str] = "bearer"
+    user: Optional[UserResponse] = None
+
+
+# ---------------------------------------------------------------------------
 # Hospital Finder & Price Comparison Schemas
 # ---------------------------------------------------------------------------
 
@@ -1015,6 +1065,8 @@ class MedicineGroup(BaseModel):
     frequency: Optional[GroupedField] = None
     duration: Optional[GroupedField] = None
     instructions: Optional[GroupedField] = None
+    unit_price: Optional[GroupedField] = None
+    line_amount: Optional[GroupedField] = None
 
 
 class ClinicalGroup(BaseModel):
@@ -1058,6 +1110,7 @@ class GroupedMedicalInformation(BaseModel):
 
     hospital: HospitalGroup = Field(default_factory=HospitalGroup)
     medicine: MedicineGroup = Field(default_factory=MedicineGroup)
+    medicines: list[MedicineGroup] = Field(default_factory=list)
     clinical: ClinicalGroup = Field(default_factory=ClinicalGroup)
     billing: BillingGroup = Field(default_factory=BillingGroup)
     document_type: Optional[str] = None

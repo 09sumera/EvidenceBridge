@@ -83,6 +83,49 @@ class Settings(BaseSettings):
     AUTH_ALGORITHM: str = "HS256"
     AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
+    # SMTP Email Configuration
+    SMTP_HOST: str = Field(
+        default_factory=lambda: os.getenv("SMTP_HOST") or "smtp.gmail.com"
+    )
+    SMTP_PORT: int = Field(
+        default_factory=lambda: int(os.getenv("SMTP_PORT", "587"))
+    )
+    SMTP_USERNAME: Optional[str] = Field(
+        default_factory=lambda: os.getenv("SMTP_USERNAME") or os.getenv("SMTP_USER")
+    )
+    SMTP_PASSWORD: Optional[str] = Field(
+        default_factory=lambda: os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_PASS")
+    )
+    SMTP_FROM_EMAIL: str = Field(
+        default_factory=lambda: os.getenv("SMTP_FROM_EMAIL") or os.getenv("SMTP_FROM") or "security@evidencebridge.local"
+    )
+    SMTP_FROM_NAME: str = Field(
+        default_factory=lambda: os.getenv("SMTP_FROM_NAME") or "EvidenceBridge Security Desk"
+    )
+    SMTP_TLS: bool = Field(
+        default_factory=lambda: os.getenv("SMTP_TLS", "true").lower() in ("true", "1", "yes")
+    )
+    SMTP_SSL: bool = Field(
+        default_factory=lambda: os.getenv("SMTP_SSL", "false").lower() in ("true", "1", "yes")
+    )
+    SMTP_TIMEOUT_SECONDS: float = Field(
+        default_factory=lambda: float(os.getenv("SMTP_TIMEOUT_SECONDS", "10.0"))
+    )
+
+    # OTP Security Policy Configuration
+    OTP_EXPIRATION_SECONDS: int = Field(
+        default_factory=lambda: int(os.getenv("OTP_EXPIRATION_SECONDS", "600"))  # 10 minutes
+    )
+    OTP_RESEND_COOLDOWN_SECONDS: int = Field(
+        default_factory=lambda: int(os.getenv("OTP_RESEND_COOLDOWN_SECONDS", "30"))  # 30 seconds
+    )
+    OTP_MAX_ATTEMPTS: int = Field(
+        default_factory=lambda: int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+    )
+    OTP_ALLOW_DEV_FALLBACK: bool = Field(
+        default_factory=lambda: os.getenv("OTP_ALLOW_DEV_FALLBACK", "true").lower() in ("true", "1", "yes")
+    )
+
     @property
     def mongodb_connection_uri(self) -> str:
         """
