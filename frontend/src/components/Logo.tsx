@@ -29,57 +29,19 @@ export function EbMark({
       className={`select-none flex-shrink-0 ${className}`}
       aria-label="EvidenceBridge EB Logo"
     >
-      <defs>
-        {/* Background Gradient */}
-        <linearGradient id="eb-bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#0B192C" />
-          <stop offset="55%" stopColor="#005B96" />
-          <stop offset="100%" stopColor="#0284C7" />
-        </linearGradient>
-
-        {/* Glow Accent */}
-        <linearGradient id="eb-cyan-glow" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#38BDF8" />
-          <stop offset="100%" stopColor="#06B6D4" />
-        </linearGradient>
-
-        {/* Shimmer Highlight */}
-        <linearGradient id="eb-highlight" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.28" />
-          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.02" />
-        </linearGradient>
-
-        {/* Subtle Drop Shadow */}
-        <filter id="eb-shadow" x="-10%" y="-10%" width="125%" height="125%">
-          <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="#001F3F" floodOpacity="0.35" />
-        </filter>
-      </defs>
-
-      {/* Rounded Container Badge */}
+      {/* Container Badge with Crisp Adjudo Border */}
       <rect
         x="2"
         y="2"
         width="44"
         height="44"
-        rx="12"
-        fill={isWhite ? '#FFFFFF' : 'url(#eb-bg-grad)'}
-        filter="url(#eb-shadow)"
-      />
-
-      {/* Glossy Top Bevel Ring */}
-      <rect
-        x="2.5"
-        y="2.5"
-        width="43"
-        height="43"
-        rx="11.5"
-        stroke="url(#eb-highlight)"
-        strokeWidth="1.2"
-        fill="none"
+        rx="10"
+        fill={isWhite ? '#FFFFFF' : '#111111'}
+        stroke={isWhite ? '#111111' : '#111111'}
+        strokeWidth="1.5"
       />
 
       {/* Letter 'E' Path */}
-      {/* Spine + 3 horizontal bars with clinical cross notch in middle */}
       <path
         d="M 12 14.5
            C 12 13.67 12.67 13 13.5 13
@@ -99,11 +61,10 @@ export function EbMark({
            L 13.5 34.5
            C 12.67 34.5 12 33.83 12 33
            Z"
-        fill={isWhite ? '#0369A1' : '#FFFFFF'}
+        fill={isWhite ? '#111111' : '#FFFFFF'}
       />
 
       {/* Letter 'B' Path */}
-      {/* Precision geometric B with smooth dual loops and medical bridge */}
       <path
         fillRule="evenodd"
         clipRule="evenodd"
@@ -129,15 +90,15 @@ export function EbMark({
            C 33 31 34.3 29.9 34.3 28.1
            C 34.3 26.4 33 25.3 31.2 25.3
            Z"
-        fill={isWhite ? '#0369A1' : '#FFFFFF'}
+        fill={isWhite ? '#111111' : '#FFFFFF'}
       />
 
-      {/* Central Medical Cross Accent Bridge between E and B */}
-      <circle cx="24" cy="23.75" r="1.6" fill={isWhite ? '#0284C7' : 'url(#eb-cyan-glow)'} />
+      {/* Central Medical Cross Accent Bridge in Signature Adjudo Orange */}
+      <circle cx="24" cy="23.75" r="2" fill="#FF5500" />
       <path
-        d="M 23 23.75 L 25 23.75"
-        stroke={isWhite ? '#0284C7' : '#38BDF8'}
-        strokeWidth="1.2"
+        d="M 22.8 23.75 L 25.2 23.75"
+        stroke="#FFFFFF"
+        strokeWidth="1"
         strokeLinecap="round"
       />
     </svg>
@@ -167,12 +128,12 @@ export default function Logo({
       <EbMark size={pixelSize} variant={variant} />
       {showText && (
         <div className="leading-tight">
-          <div className="font-extrabold text-slate-900 tracking-tight text-base sm:text-lg flex items-center gap-1.5">
+          <div className="font-black text-neutral-950 dark:text-white tracking-tight text-base sm:text-lg flex items-center gap-1">
             <span>Evidence</span>
-            <span className="text-sky-600 font-black">Bridge</span>
+            <span className="text-orange-600 dark:text-orange-500">Bridge</span>
           </div>
           {subtext && (
-            <div className="text-[11px] text-slate-500 font-medium tracking-normal mt-0.5">
+            <div className="text-[11px] text-neutral-500 dark:text-neutral-400 font-medium tracking-normal mt-0.5">
               {subtext}
             </div>
           )}

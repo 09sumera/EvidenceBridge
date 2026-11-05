@@ -4,11 +4,16 @@ import { getClaim, getVerification, getAudit, verifyClaim } from '../api/client'
 import type { Claim, VerificationResult, AuditTrail } from '../types'
 import { VerificationBadge, VerdictBadge } from '../components/VerificationBadge'
 import { AuditTrailViewer } from '../components/AuditTrailViewer'
+import { FiveModelsAuditPanel } from '../components/FiveModelsAuditPanel'
+import { ModelStatusCard } from '../components/ModelStatusCard'
 import { useVoice } from '../context/VoiceContext'
+import { useAuth } from '../context/AuthContext'
+import { getUserClaimById } from '../services/userDataStore'
 import { formatCurrency } from '../utils/currency'
 
 export default function ClaimDetail() {
   const { claimId } = useParams<{ claimId: string }>()
+  const { user } = useAuth()
   const { setActiveClaim, readClaimAloud } = useVoice()
 
   const [claim, setClaim] = useState<Claim | null>(null)
@@ -23,6 +28,17 @@ export default function ClaimDetail() {
     if (!claimId) return
     setLoading(true)
     setError(null)
+
+    // 1. Check current user's isolated data store first
+    const userEmail = user?.email || 'ramesh.kumar@patient.local'
+    const local = getUserClaimById(userEmail, claimId)
+    if (local && local.claim) {
+      setClaim(local.claim)
+      setVerification(local.verification)
+      setAuditTrail(local.auditTrail)
+      setLoading(false)
+      return
+    }
 
     try {
       const [cRes, vRes, aRes] = await Promise.allSettled([
@@ -148,6 +164,9 @@ export default function ClaimDetail() {
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
+      {/* 5 AI Models Live Status Architecture Banner */}
+      <ModelStatusCard />
+
       {/* Top Breadcrumb & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -427,8 +446,32 @@ export default function ClaimDetail() {
             </div>
           )}
 
+          {/* Five Integrated AI Models Panel */}
+          <FiveModelsAuditPanel
+            claimId={claim.claim_id}
+            sharedContext={verification?.shared_context}
+            synthesis={verification?.synthesis}
+            nerEntities={verification?.ner_entities}
+            retrievalPassages={verification?.passages_considered?.map((p) => ({
+              passage_id: p.passage_id,
+              guideline_id: p.guideline_id,
+              title: p.title,
+              source: p.source,
+              text: p.text,
+              similarity_score: p.relevance_score,
+              model_name: 'BGE Small en-v1.5',
+            }))}
+            nliResult={verification?.nli_result}
+            providerAnomaly={verification?.provider_anomaly}
+            claimAnomaly={verification?.claim_anomaly}
+            medicineSubstitution={verification?.medicine_substitution}
+            billingReconciliation={verification?.billing_reconciliation}
+            requiresHumanReview={verification?.requires_human_review}
+            humanReviewReasons={verification?.human_review_reasons}
+          />
+
           {/* 7-Stage Audit Trail Viewer */}
-          {auditTrail && <AuditTrailViewer auditTrail={auditTrail} />}
+          {auditTrail && <AuditTrailViewer auditTrail={auditTrail} verification={verification} />}
         </div>
 
         {/* Right Column (1/3): Sticky Audit Verdict Summary */}

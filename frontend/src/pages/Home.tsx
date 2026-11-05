@@ -3,6 +3,7 @@ import { getHealth } from '../api/client'
 import ExtractVerifyForm from '../components/ExtractVerifyForm'
 import type { HealthResponse } from '../types'
 import { useAudit } from '../context/AuditContext'
+import { useTheme } from '../context/ThemeContext'
 
 interface SampleCase {
   label: string
@@ -15,7 +16,7 @@ const SAMPLE_CASES: SampleCase[] = [
   {
     label: 'Saline IV Infusion Markup (₹1,800)',
     category: 'Markup Flag',
-    description: '15× markup on routine emergency IV fluid exceeding NPPA national ceiling price benchmark (₹105)',
+    description: '17.1× markup on routine emergency IV fluid exceeding NPPA national ceiling price benchmark (₹105.00 incl. 5% GST)',
     text: `EMERGENCY DEPARTMENT CHARGE SUMMARY
 MANIPAL HOSPITAL - BENGALURU, KARNATAKA
 Patient: Ramesh Kumar (Acct #MH-BLR-2026-4412)
@@ -95,13 +96,14 @@ Clinical Note: Emergency administration of normal saline for acute dehydration f
 ]
 
 export default function Home() {
-  const [health, setHealth] = useState<{
+  const [, setHealth] = useState<{
     loading: boolean
     ok: boolean
     data?: HealthResponse
   }>({ loading: true, ok: false })
 
   const { activePreset, setText: setAuditText, setActivePreset } = useAudit()
+  const { isDark } = useTheme()
 
   useEffect(() => {
     let active = true
@@ -126,50 +128,78 @@ export default function Home() {
     <div className="max-w-6xl mx-auto space-y-8">
       {/* Page Title & Plain-English Explainer */}
       <div className="text-center max-w-3xl mx-auto">
-        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-800 text-xs font-semibold mb-3 shadow-subtle">
+        <div className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider mb-3.5 border transition-all ${
+          isDark
+            ? 'bg-neutral-900 border-neutral-700 text-orange-400 shadow-adjudo-sm'
+            : 'bg-cream-200 border-neutral-900 text-neutral-950 shadow-adjudo-sm'
+        }`}>
           <span>🩺 Clinical Claims &amp; Billing Auditor</span>
         </div>
-        <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
+        <h1 className={`text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-neutral-950 dark:text-white ${
+          isDark ? 'text-white' : 'text-neutral-950'
+        }`}>
           Audit Clinical Notes &amp; Hospital Bills
         </h1>
-        <p className="mt-2.5 text-base text-slate-600 leading-relaxed">
+        <p className={`mt-3 text-sm sm:text-base leading-relaxed text-neutral-700 dark:text-neutral-300 ${
+          isDark ? 'text-neutral-300' : 'text-neutral-700'
+        }`}>
           Upload a bill photo, take a camera snapshot, or paste any clinical chart note or itemized hospital charge. EvidenceBridge extracts document text with OCR, verifies clinical indications against medical guidelines, and audits charges against regional pricing benchmarks.
         </p>
       </div>
 
       {/* Stepped Process Visual */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-subtle flex items-start gap-3.5">
-          <div className="w-8 h-8 rounded-xl bg-sky-100 text-sky-700 font-bold text-sm flex items-center justify-center flex-shrink-0">
+        <div className={`p-5 rounded-2xl border transition-all ${
+          isDark
+            ? 'bg-adjudo-dark-surface border-neutral-700 shadow-adjudo'
+            : 'bg-white border-neutral-900 shadow-adjudo'
+        } flex items-start gap-3.5`}>
+          <div className="w-8 h-8 rounded-xl font-black text-sm flex items-center justify-center flex-shrink-0 bg-orange-600 text-white border border-neutral-900 shadow-adjudo-sm">
             1
           </div>
           <div>
-            <div className="text-sm font-bold text-slate-800">Input Document</div>
-            <div className="text-xs text-slate-500 mt-1 leading-normal">
+            <div className={`text-sm font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>
+              Input Document
+            </div>
+            <div className={`text-xs mt-1 leading-normal ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
               Upload a bill photo, take a picture with camera, paste text, or select a sample case.
             </div>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-subtle flex items-start gap-3.5">
-          <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-700 font-bold text-sm flex items-center justify-center flex-shrink-0">
+        <div className={`p-5 rounded-2xl border transition-all ${
+          isDark
+            ? 'bg-adjudo-dark-surface border-neutral-700 shadow-adjudo'
+            : 'bg-white border-neutral-900 shadow-adjudo'
+        } flex items-start gap-3.5`}>
+          <div className={`w-8 h-8 rounded-xl font-black text-sm flex items-center justify-center flex-shrink-0 border border-neutral-900 shadow-adjudo-sm ${
+            isDark ? 'bg-neutral-100 text-neutral-950' : 'bg-neutral-950 text-white'
+          }`}>
             2
           </div>
           <div>
-            <div className="text-sm font-bold text-slate-800">Check Evidence &amp; Price</div>
-            <div className="text-xs text-slate-500 mt-1 leading-normal">
+            <div className={`text-sm font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>
+              Check Evidence &amp; Price
+            </div>
+            <div className={`text-xs mt-1 leading-normal ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
               Searches medical guidelines and compares against CMS price benchmarks.
             </div>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-subtle flex items-start gap-3.5">
-          <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 font-bold text-sm flex items-center justify-center flex-shrink-0">
+        <div className={`p-5 rounded-2xl border transition-all ${
+          isDark
+            ? 'bg-adjudo-dark-surface border-neutral-700 shadow-adjudo'
+            : 'bg-white border-neutral-900 shadow-adjudo'
+        } flex items-start gap-3.5`}>
+          <div className="w-8 h-8 rounded-xl font-black text-sm flex items-center justify-center flex-shrink-0 bg-emerald-600 text-white border border-neutral-900 shadow-adjudo-sm">
             3
           </div>
           <div>
-            <div className="text-sm font-bold text-slate-800">Review 7-Stage Audit</div>
-            <div className="text-xs text-slate-500 mt-1 leading-normal">
+            <div className={`text-sm font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>
+              Review 7-Stage Audit
+            </div>
+            <div className={`text-xs mt-1 leading-normal ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
               Inspect full decision trail, guideline citations, and markup ratios.
             </div>
           </div>
@@ -177,13 +207,19 @@ export default function Home() {
       </div>
 
       {/* Sample Cases Picker */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-7 shadow-subtle">
+      <div className={`rounded-2xl border p-6 sm:p-7 transition-all ${
+        isDark
+          ? 'bg-adjudo-dark-surface border-neutral-700 shadow-adjudo'
+          : 'bg-white border-neutral-900 shadow-adjudo'
+      }`}>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+            <h3 className={`text-xs font-black uppercase tracking-wider ${
+              isDark ? 'text-white' : 'text-neutral-950'
+            }`}>
               Try a Pre-Configured Sample Case
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className={`text-xs mt-0.5 ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
               Click any realistic clinical scenario to pre-populate the input form
             </p>
           </div>
@@ -193,7 +229,7 @@ export default function Home() {
               onClick={() => {
                 setActivePreset(null)
               }}
-              className="text-xs text-slate-400 hover:text-slate-600 font-medium"
+              className="text-xs text-neutral-500 hover:text-black dark:hover:text-white font-bold cursor-pointer"
             >
               Clear selection
             </button>
@@ -205,32 +241,50 @@ export default function Home() {
             const isSelected = activePreset === sample.label
             const badgeColor =
               sample.category === 'Approved'
-                ? 'bg-emerald-100 text-emerald-800'
+                ? isDark
+                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700'
+                  : 'bg-emerald-100 text-emerald-950 border border-emerald-600'
                 : sample.category === 'Markup Flag'
-                ? 'bg-amber-100 text-amber-900'
+                ? isDark
+                  ? 'bg-amber-950/80 text-amber-300 border border-amber-700'
+                  : 'bg-amber-100 text-amber-950 border border-amber-600'
                 : sample.category === 'Guideline Flag'
-                ? 'bg-rose-100 text-rose-800'
-                : 'bg-slate-200 text-slate-800'
+                ? isDark
+                  ? 'bg-rose-950/80 text-rose-300 border border-rose-700'
+                  : 'bg-rose-100 text-rose-950 border border-rose-600'
+                : isDark
+                ? 'bg-neutral-800 text-neutral-300 border border-neutral-700'
+                : 'bg-stone-200 text-stone-900 border border-stone-500'
 
             return (
               <button
                 key={sample.label}
                 type="button"
                 onClick={() => handleSelectSample(sample)}
-                className={`text-left p-4 rounded-xl border transition-all ${
+                className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
                   isSelected
-                    ? 'border-sky-500 bg-sky-50/70 shadow-sm'
-                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100 hover:border-slate-300'
+                    ? isDark
+                      ? 'border-2 border-orange-500 bg-orange-950/40 shadow-adjudo-orange'
+                      : 'border-2 border-orange-500 bg-orange-50/80 shadow-adjudo-orange'
+                    : isDark
+                    ? 'border-neutral-700 bg-neutral-900/60 hover:bg-neutral-900 hover:border-neutral-500 shadow-adjudo-sm'
+                    : 'border-neutral-900 bg-cream-50 hover:bg-cream-200/60 shadow-adjudo-sm hover:-translate-y-0.5'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className={`px-2.5 py-0.5 rounded text-xs font-bold ${badgeColor}`}>
+                  <span className={`px-2 py-0.5 rounded text-xs font-black ${badgeColor}`}>
                     {sample.category}
                   </span>
-                  <span className="text-xs text-sky-600 font-semibold">Select &rarr;</span>
+                  <span className={`text-xs font-black ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>
+                    Select &rarr;
+                  </span>
                 </div>
-                <div className="font-bold text-sm text-slate-900">{sample.label}</div>
-                <div className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">
+                <div className={`font-black text-sm ${isDark ? 'text-white' : 'text-neutral-950'}`}>
+                  {sample.label}
+                </div>
+                <div className={`text-xs mt-1 line-clamp-2 leading-relaxed ${
+                  isDark ? 'text-neutral-400' : 'text-neutral-600'
+                }`}>
                   {sample.description}
                 </div>
               </button>

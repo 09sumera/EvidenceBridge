@@ -265,11 +265,62 @@ class AuditService:
             }
         ))
 
+        # Step 5a: Model 4 Provider Anomaly Screening
+        if verification.provider_anomaly:
+            p_res = verification.provider_anomaly
+            if p_res.has_sufficient_data:
+                p_summary = f"Isolation Forest V3: Score={p_res.anomaly_score:.3f}, Flag='{p_res.screening_flag}', Decision={p_res.decision}."
+            else:
+                p_summary = "Isolation Forest V3: INSUFFICIENT_DATA (provider practice history required for screening)."
+            steps.append(cls.create_step(
+                step_name="PROVIDER_SCREENING",
+                input_summary="Model 4 Provider-level billing patterns across 9 features",
+                output_summary=p_summary,
+                details={
+                    "model_version": p_res.model_version,
+                    "decision": p_res.decision,
+                    "is_anomaly": p_res.is_anomaly,
+                    "anomaly_score": p_res.anomaly_score,
+                    "screening_flag": p_res.screening_flag,
+                    "has_sufficient_data": p_res.has_sufficient_data,
+                    "explanations": p_res.explanations,
+                }
+            ))
+
+        # Step 5b: Model 5 Claim Anomaly Screening
+        if verification.claim_anomaly:
+            c_res = verification.claim_anomaly
+            if c_res.has_sufficient_data:
+                c_summary = f"Isolation Forest V3 Strict: Score={c_res.anomaly_score:.3f}, Flag='{c_res.screening_flag}', Decision={c_res.decision}."
+            else:
+                c_summary = "Isolation Forest V3 Strict: INSUFFICIENT_DATA (inpatient utilization features required for screening)."
+            steps.append(cls.create_step(
+                step_name="CLAIM_SCREENING",
+                input_summary="Model 5 Claim-level utilization metrics across 13 features",
+                output_summary=c_summary,
+                details={
+                    "model_version": c_res.model_version,
+                    "decision": c_res.decision,
+                    "is_anomaly": c_res.is_anomaly,
+                    "anomaly_score": c_res.anomaly_score,
+                    "screening_flag": c_res.screening_flag,
+                    "model_agreement": c_res.model_agreement,
+                    "has_sufficient_data": c_res.has_sufficient_data,
+                    "explanations": c_res.explanations,
+                }
+            ))
+
         # Step 6: Abstention Gate
         if abstention_decision.should_abstain:
             gate_out = (
                 f"ABSTAIN TRIGGERED by rule [{rule_name or 'SAFETY_RULE'}]: "
                 f"{abstention_decision.reason}. Policy override enforced."
+            )
+        elif cost_details.is_anomaly:
+            mult = cost_details.multiplier or 1.0
+            gate_out = (
+                f"SAFETY POLICY FLAG: Pricing benchmark anomaly detected ({mult:.1f}× benchmark max). "
+                f"Clinical evidence gates cleared, but cost policy requires mandatory human review (FLAG)."
             )
         else:
             gate_out = "PASSED: All 5 safety gates cleared (valid entity, relevant evidence, no unresolvable conflict, confidence floor met, cost benchmark valid)."
@@ -284,7 +335,9 @@ class AuditService:
                 "reason": abstention_decision.reason,
                 "pre_gate_verdict": raw_verdict_str,
                 "pre_gate_support_score": raw_score,
-                "policy_override_applied": policy_override_applied and abstention_decision.should_abstain,
+                "policy_override_applied": policy_override_applied,
+                "policy_override_reason": policy_override_reason,
+                "cost_anomaly_flag": cost_details.is_anomaly,
                 "rules_evaluated": [
                     "ENTITY_NOT_FOUND",
                     "NO_RELEVANT_EVIDENCE",
@@ -326,6 +379,9 @@ class AuditService:
                 "cost_anomaly_flag": verification.cost_anomaly_flag,
                 "abstain_triggered": abstention_decision.should_abstain,
                 "abstain_reason": verification.abstain_reason,
+                "detected_issues": getattr(verification.synthesis, "detected_issues", []) if getattr(verification, "synthesis", None) else [],
+                "primary_trigger_issue": getattr(verification.synthesis, "primary_trigger_issue", None) if getattr(verification, "synthesis", None) else None,
+                "cross_model_synthesis": getattr(verification.synthesis, "synthesis_markdown", None) if getattr(verification, "synthesis", None) else None,
             }
         ))
 

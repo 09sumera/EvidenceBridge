@@ -78,10 +78,10 @@
   },
   {
     "guideline_id": "GUIDE-INFUS-012",
-    "title": "USP & CDC Clinical Guidelines: 0.9% Sodium Chloride (Normal Saline) IV Solution",
-    "source": "United States Pharmacopeia & CDC Healthcare Guidelines",
-    "topics": ["normal saline", "sodium chloride", "iv fluid", "hydration", "intravenous"],
-    "text": "0.9% Sodium Chloride Injection (Normal Saline) 1,000 mL sterile intravenous infusion bag is an essential isotonic crystalloid fluid indicated for extracellular fluid replacement, rehydration, and maintenance of electrolyte balance. It is an elemental commodity solution in hospital and emergency care with minimal baseline production and wholesale distribution costs."
+    "title": "Indian Pharmacopoeia (IP) & MoHFW NHM Guidelines: 0.9% Sodium Chloride (Normal Saline) IV Solution",
+    "source": "Indian Pharmacopoeia Commission (IPC) & MoHFW National Health Mission Standard Treatment Guidelines",
+    "topics": ["normal saline", "sodium chloride", "iv fluid", "hydration", "intravenous", "gastroenteritis", "dehydration", "0.9% nacl", "emergency rehydration"],
+    "text": "Sodium Chloride Intravenous Infusion IP (0.9% w/v Normal Saline) is an essential isotonic crystalloid fluid specified in the Indian Pharmacopoeia (IP) and National Health Mission (NHM) Standard Treatment Guidelines. It is indicated for urgent intravenous rehydration, fluid resuscitation, and electrolyte restoration in acute dehydration secondary to acute gastroenteritis, hypovolemia, and emergency volume depletion. It represents an essential commodity medicine subject to NPPA DPCO national ceiling price regulation."
   },
   {
     "guideline_id": "GUIDE-IMAG-013",
@@ -110,5 +110,47 @@
     "source": "College of American Pathologists (CAP) & American Association for Clinical Chemistry",
     "topics": ["cbc", "complete blood count", "cpt 85025", "85025", "differential", "anemia", "infection", "leukocytosis"],
     "text": "Complete Blood Count (CBC) with automated differential (CPT 85025) provides quantitative evaluation of red blood cells, white blood cells, hemoglobin, hematocrit, and platelet counts. Indicated for evaluating suspected anemia, systemic infection, unexplained fever, hemorrhage, or hematologic monitoring during cytotoxic therapy."
+  },
+  {
+    "guideline_id": "GUIDE-IN-DIAB-017",
+    "title": "ICMR Guidelines for Management of Type 2 Diabetes: Metformin Initial Therapy",
+    "source": "Indian Council of Medical Research (ICMR) & National Health Mission (NHM) Clinical Guidelines",
+    "topics": ["metformin", "type 2 diabetes", "glycemic control", "icmr", "antidiabetic", "hba1c", "blood sugar", "diabetes mellitus"],
+    "text": "The Indian Council of Medical Research (ICMR) clinical guidelines for Type 2 Diabetes Mellitus recommend Metformin as the foundational first-line oral antidiabetic therapy unless contraindicated by severe renal impairment (eGFR < 30 mL/min). Initial monotherapy should be initiated at 500 mg once or twice daily with meals and titrated up to 1000 mg to 2000 mg daily to achieve glycemic control (target HbA1c < 7.0%). Lifestyle modification and medical nutrition therapy should be implemented concurrently."
+  },
+  {
+    "guideline_id": "GUIDE-IN-PHARM-018",
+    "title": "Indian Pharmacopoeia (IP) & NHM Guidelines: Paracetamol Oral Dosing in Acute Febrile Illness",
+    "source": "Indian Pharmacopoeia Commission (IPC) & MoHFW National Health Mission Standard Treatment Guidelines",
+    "topics": ["paracetamol", "acetaminophen", "dolo 650", "fever", "antipyretic", "indian pharmacopoeia", "mohfw", "nhm", "acute fever", "analgesic"],
+    "text": "According to the Indian Pharmacopoeia (IP) and MoHFW National Health Mission Standard Treatment Guidelines, Paracetamol (Acetaminophen) is the antipyretic and analgesic of choice for acute febrile illness, symptomatic fever, and mild-to-moderate pain. For adults and adolescents, the recommended oral dose is 500 mg to 650 mg administered every 4 to 6 hours as required, not exceeding 3000 mg to 4000 mg within a 24-hour period. Doses above recommended thresholds are associated with hepatotoxicity. In mild to moderate viral fevers, rational oral antipyretic therapy is supported."
+  },
+  {
+    "guideline_id": "GUIDE-IN-HTN-019",
+    "title": "Indian Hypertension Guidelines (IHG-IV) & ICMR: Antihypertensive Monotherapy",
+    "source": "Association of Physicians of India (API) & Indian Council of Medical Research (ICMR) - IHG-IV Guidelines",
+    "topics": ["hypertension", "blood pressure", "amlodipine", "telmisartan", "icmr", "ihg-iv", "antihypertensive", "essential hypertension", "systolic"],
+    "text": "The Fourth Indian Hypertension Guidelines (IHG-IV) formulated by the Association of Physicians of India in consensus with ICMR recommend initial pharmacotherapy for essential hypertension with a low-dose CCB (such as Amlodipine 5 mg daily), ARB (such as Telmisartan 40 mg daily), or an ACE inhibitor. In stage 1 hypertension (BP 140-159 / 90-99 mmHg), monotherapy coupled with dietary sodium restriction (< 5 g/day) and cardiovascular risk assessment is the primary standard of care."
+  },
+  {
+    "guideline_id": "GUIDE-IN-ORS-020",
+    "title": "MoHFW NHM & IAP Guidelines: Oral Rehydration Therapy for Acute Gastroenteritis",
+    "source": "Ministry of Health and Family Welfare (MoHFW) National Health Mission & IAP Clinical Guidelines",
+    "topics": ["oral rehydration solution", "ors", "acute gastroenteritis", "diarrhea", "dehydration", "mohfw", "nhm", "iap", "rehydration"],
+    "text": "Ministry of Health and Family Welfare (MoHFW) National Health Mission and Indian Academy of Pediatrics guidelines stipulate that low-osmolarity Oral Rehydration Salts (ORS) solution is the cornerstone of therapy for acute gastroenteritis and diarrhea with mild to moderate dehydration. Oral rehydration should be commenced immediately and continued until diarrhea ceases. Intravenous fluids (such as 0.9% Normal Saline or Ringer Lactate) are reserved for severe dehydration or when oral fluid intake is precluded by persistent vomiting or shock."
+  },
+  {
+    "guideline_id": "GUIDE-IN-STAT-021",
+    "title": "ICMR & RSSDI Guidelines: Statin Therapy (Atorvastatin) for Dyslipidemia & Cardiovascular Risk Reduction in Type 2 Diabetes",
+    "source": "Indian Council of Medical Research (ICMR) & Research Society for the Study of Diabetes in India (RSSDI)",
+    "topics": ["atorvastatin", "statin", "dyslipidemia", "type 2 diabetes", "cholesterol", "ldl", "cardiovascular risk", "lipid lowering", "diabetes"],
+    "text": "According to the ICMR and RSSDI clinical guidelines for Type 2 Diabetes Mellitus, moderate-to-high intensity statin therapy (such as Atorvastatin 10 mg to 20 mg once daily at bedtime) is recommended as primary cardiovascular prevention in adult patients aged 40-75 years with diabetes, regardless of baseline LDL-cholesterol levels. Target LDL reduction is >= 30-50%. In patients with diabetes and additional atherosclerotic cardiovascular risk factors, routine initiation of oral Atorvastatin 10 mg at night is strongly supported to prevent microvascular and macrovascular complications."
+  },
+  {
+    "guideline_id": "GUIDE-IN-SULF-022",
+    "title": "RSSDI & ICMR Guidelines: Second-Line Sulfonylurea (Glimepiride) in Type 2 Diabetes Mellitus",
+    "source": "Research Society for the Study of Diabetes in India (RSSDI) & ICMR Consensus Guidelines",
+    "topics": ["glimepiride", "sulfonylurea", "type 2 diabetes", "glycemic control", "hba1c", "blood glucose", "antidiabetic", "oral hypoglycemic"],
+    "text": "The RSSDI and ICMR guidelines for Type 2 Diabetes recommend modern second-generation sulfonylureas, particularly Glimepiride (1 mg to 2 mg once daily before breakfast or main meal), as a cost-effective and evidence-backed second-line oral add-on therapy when Metformin monotherapy alone does not achieve target glycemic control (e.g., HbA1c > 7.0-7.5%). Glimepiride stimulates glucose-dependent insulin secretion with lower hypoglycemia risk compared to older sulfonylureas. Titration should proceed gradually with self-monitoring of blood glucose."
   }
 ]

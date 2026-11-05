@@ -141,6 +141,62 @@ class Settings(BaseSettings):
     MONGODB_EVALUATIONS_COLLECTION: str = "evaluation_runs"
     EVALUATION_DATASET_PATH: str = "./data/evaluation/controlled_cases.json"
 
+    # AI Models Integration Configuration (Models 1 - 5)
+    AI_DEVICE: str = Field(
+        default_factory=lambda: os.getenv("AI_DEVICE") or "cuda"
+    )
+    MODEL_1_BIOBERT_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_1_BIOBERT_PATH") or "models/EvidenceBridge_BioBERT/model_1_biobert_v4/best_model"
+    )
+    MODEL_2_BGE_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_2_BGE_PATH") or "models/EvidenceBridge_BGE/base_model"
+    )
+    MODEL_2_BGE_FINETUNED_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_2_BGE_FINETUNED_PATH") or "models/EvidenceBridge_BioBERT/model_2_retrieval/bge_finetuned"
+    )
+    MODEL_3_DEBERTA_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_3_DEBERTA_PATH") or "evidencebridge-model3-deberta-v1"
+    )
+    MODEL_3_CONFIDENCE_THRESHOLD: float = 0.80
+    MODEL_4_ANOMALY_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_4_ANOMALY_PATH") or "evidencebridge-model4-anomaly/v3/isolation_forest_v3.joblib"
+    )
+    MODEL_4_ANOMALY_V1_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_4_ANOMALY_V1_PATH") or "evidencebridge-model4-anomaly/v1/isolation_forest.joblib"
+    )
+    MODEL_4_ANOMALY_V2_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_4_ANOMALY_V2_PATH") or "evidencebridge-model4-anomaly/v2/isolation_forest_v2.joblib"
+    )
+    MODEL_5_CLAIM_ANOMALY_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_5_CLAIM_ANOMALY_PATH") or "evidencebridge-model5-claim-anomaly/models/EvidenceBridge_Model5_V3_Strict.joblib"
+    )
+    MODEL_5_CLAIM_ANOMALY_V4A_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_5_CLAIM_ANOMALY_V4A_PATH") or "evidencebridge-model5-claim-anomaly/models/EvidenceBridge_Model5_V4A_Experimental.joblib"
+    )
+    MODEL_5_MEDICINE_MATCHER_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_5_MEDICINE_MATCHER_PATH") or "models/EvidenceBridge_BioBERT/model_5_medicine/medicine_matcher.joblib"
+    )
+
+    # Model 6: Image-Based Medical Document AI (ResNet18)
+    MODEL_6_DOCUMENT_AI_PATH: str = Field(
+        default_factory=lambda: os.getenv("MODEL_6_DOCUMENT_AI_PATH")
+        or r"C:\Users\tejes\Downloads\EvidenceBridge_Model6_COMPLETE\EvidenceBridge_Model6\models\evidencebridge_model6_resnet18.pth"
+    )
+    MODEL_6_CONFIDENCE_THRESHOLD: float = Field(
+        default_factory=lambda: float(os.getenv("MODEL_6_CONFIDENCE_THRESHOLD", "0.55"))
+    )
+    MODEL_6_DEVICE: str = Field(
+        default_factory=lambda: os.getenv("MODEL_6_DEVICE") or "cpu"
+    )
+
+    # External Karnataka ML API Integration Configuration
+    KARNATAKA_ML_BASE_URL: str = Field(
+        default_factory=lambda: os.getenv("KARNATAKA_ML_BASE_URL") or "https://evidencebridge-karnataka-ml.onrender.com"
+    )
+    KARNATAKA_ML_TIMEOUT_SECONDS: float = Field(
+        default_factory=lambda: float(os.getenv("KARNATAKA_ML_TIMEOUT_SECONDS", "25.0"))
+    )
+
 
 @lru_cache()
 def get_settings() -> Settings:

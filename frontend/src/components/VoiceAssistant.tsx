@@ -4,7 +4,7 @@ import { useVoice } from '../context/VoiceContext'
 import { useAuth } from '../context/AuthContext'
 
 export function VoiceAssistant() {
-  const { isAuthenticated } = useAuth()
+  const { user, isAuthenticated, isHospitalManagement } = useAuth()
   const navigate = useNavigate()
   const {
     isOpen,
@@ -18,6 +18,8 @@ export function VoiceAssistant() {
     setIsContinuous,
     kannadaVoiceAvailable,
     transcript,
+    finalUserSaid,
+    setFinalUserSaid,
     lastSpoken,
     history,
     error,
@@ -31,8 +33,8 @@ export function VoiceAssistant() {
     clearHistory,
   } = useVoice()
 
-  // Do not render on public landing page or when unauthenticated
-  if (!isAuthenticated || !isEnabled) {
+  // Strictly patient accounts only – do not render for hospital admin or unauthenticated
+  if (!isAuthenticated || isHospitalManagement || user?.portal === 'hospital_management' || !isEnabled) {
     return null
   }
 
@@ -277,17 +279,26 @@ export function VoiceAssistant() {
                 </span>
               </div>
 
-              {/* Live Transcript / Feedback */}
-              {transcript ? (
-                <p className="text-xs font-medium text-slate-900 bg-white/80 px-3 py-1.5 rounded-lg border border-slate-200 w-full mt-1">
-                  &ldquo;{transcript}&rdquo;
-                </p>
-              ) : status === 'listening' ? (
-                <p className="text-[11px] text-slate-500">
-                  {language === 'kn'
-                    ? 'ಈಗ ಮಾತನಾಡಿ ("ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ", "ಫಲಿತಾಂಶ ಓದಿ", "ನಿಲ್ಲಿಸು")'
-                    : 'Speak now (e.g. "Find hospitals", "Why was this flagged?", "Stop listening")'}
-                </p>
+              {/* Live Transcript / Feedback (LISTENING) */}
+              {status === 'listening' ? (
+                <div className="w-full mt-2 text-left bg-white/95 p-3 rounded-xl border border-rose-200 shadow-2xs space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-black tracking-wider text-rose-600 uppercase">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                      LISTENING:
+                    </span>
+                    <span className="text-[9px] font-bold text-rose-500">Live Speech</span>
+                  </div>
+                  {transcript ? (
+                    <p className="text-xs font-bold text-slate-900 leading-snug">
+                      {transcript}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 italic">
+                      {language === 'kn' ? 'ಈಗ ಮಾತನಾಡಿ ("ಕ್ಲೈಮ್ ತೆರೆಯಿರಿ", "ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ")...' : 'Speak now (e.g. "Open claims", "Open hospitals", "Read summary")...'}
+                    </p>
+                  )}
+                </div>
               ) : null}
 
               {/* Action Buttons for Speaking / Listening */}
@@ -296,7 +307,7 @@ export function VoiceAssistant() {
                   <button
                     type="button"
                     onClick={stopSpeaking}
-                    className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition-colors"
+                    className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition-colors cursor-pointer"
                   >
                     {language === 'kn' ? '⏹ ಧ್ವನಿ ನಿಲ್ಲಿಸಿ (Stop)' : '⏹ Stop Speaking'}
                   </button>
@@ -305,13 +316,25 @@ export function VoiceAssistant() {
                   <button
                     type="button"
                     onClick={stopListening}
-                    className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-[11px] font-bold transition-colors"
+                    className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-[11px] font-bold transition-colors cursor-pointer"
                   >
                     {language === 'kn' ? '⏸ ಆಲಿಸುವುದು ವಿರಾಮ (Pause)' : '⏸ Pause Listening'}
                   </button>
                 )}
               </div>
             </div>
+
+            {/* Recognized Command (YOU SAID) */}
+            {finalUserSaid && (
+              <div className="p-3 rounded-xl bg-slate-100 border border-slate-300 text-left space-y-0.5 shadow-2xs animate-in fade-in">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">
+                  YOU SAID:
+                </span>
+                <p className="text-xs font-black text-slate-900 leading-snug">
+                  &ldquo;{finalUserSaid}&rdquo;
+                </p>
+              </div>
+            )}
 
             {/* Error / Fallback Notice */}
             {error && (
@@ -330,22 +353,17 @@ export function VoiceAssistant() {
               </div>
             )}
 
-            {/* Latest Assistant Spoken/Displayed Text Card */}
+            {/* Latest Assistant Spoken/Displayed Text Card (ASSISTANT ANSWER) */}
             {lastSpoken && status !== 'listening' && (
-              <div className="p-3 rounded-xl bg-slate-900 text-white text-xs space-y-1.5">
+              <div className="p-3 rounded-xl bg-slate-900 text-white text-xs space-y-1.5 text-left shadow-md animate-in fade-in">
                 <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase font-bold tracking-wider">
-                  <span className="flex items-center gap-1.5">
-                    <span>{language === 'kn' ? 'ಸಹಾಯಕ ಉತ್ತರ (Answer)' : 'Assistant Answer'}</span>
-                    {language === 'kn' && !kannadaVoiceAvailable && (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] bg-slate-800 text-amber-300 font-semibold border border-slate-700">
-                        Text Only
-                      </span>
-                    )}
+                  <span className="flex items-center gap-1.5 font-black text-sky-400">
+                    ASSISTANT ANSWER:
                   </span>
                   <button
                     type="button"
                     onClick={() => speak(lastSpoken)}
-                    className="text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1"
+                    className="text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer"
                     title={
                       language === 'kn' && !kannadaVoiceAvailable
                         ? 'Kannada voice is not available on this device'
@@ -371,15 +389,16 @@ export function VoiceAssistant() {
                 <button
                   type="button"
                   onClick={() => {
+                    setFinalUserSaid(language === 'kn' ? 'ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ' : 'Find hospitals')
                     navigate('/hospitals')
                     const navMsg =
                       language === 'kn'
-                        ? 'ಹತ್ತಿರದ ಆಸ್ಪತ್ರೆಗಳು ಮತ್ತು ವೆಚ್ಚ ಹುಡುಕುವ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.'
-                        : 'Opening Hospital Finder.'
+                        ? 'ಆಸ್ಪತ್ರೆಗಳ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.'
+                        : 'Opening Hospitals.'
                     speak(navMsg)
                     setIsOpen(false)
                   }}
-                  className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-xs font-semibold text-left transition-colors flex items-center gap-1.5"
+                  className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-xs font-semibold text-left transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>🏥</span>
                   <span className="truncate">{language === 'kn' ? 'ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ' : 'Find Hospitals'}</span>
@@ -387,8 +406,11 @@ export function VoiceAssistant() {
 
                 <button
                   type="button"
-                  onClick={() => readClaimAloud()}
-                  className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold text-left transition-colors flex items-center gap-1.5"
+                  onClick={() => {
+                    setFinalUserSaid(language === 'kn' ? 'ಫಲಿತಾಂಶ ಓದಿ' : 'Read result')
+                    readClaimAloud()
+                  }}
+                  className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold text-left transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>🔊</span>
                   <span className="truncate">{language === 'kn' ? 'ಫಲಿತಾಂಶ ಓದಿ' : 'Read Result'}</span>
@@ -396,8 +418,11 @@ export function VoiceAssistant() {
 
                 <button
                   type="button"
-                  onClick={() => explainClaim('why_flagged')}
-                  className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold text-left transition-colors flex items-center gap-1.5"
+                  onClick={() => {
+                    setFinalUserSaid(language === 'kn' ? 'ಏಕೆ ಫ್ಲ್ಯಾಗ್?' : 'Why flagged?')
+                    explainClaim('why_flagged')
+                  }}
+                  className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold text-left transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>❓</span>
                   <span className="truncate">{language === 'kn' ? 'ಏಕೆ ಫ್ಲ್ಯಾಗ್?' : 'Why Flagged?'}</span>
@@ -405,8 +430,11 @@ export function VoiceAssistant() {
 
                 <button
                   type="button"
-                  onClick={() => explainClaim('price_problem')}
-                  className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold text-left transition-colors flex items-center gap-1.5"
+                  onClick={() => {
+                    setFinalUserSaid(language === 'kn' ? 'ಬೆಲೆಯ ಸಮಸ್ಯೆ?' : 'Price problem?')
+                    explainClaim('price_problem')
+                  }}
+                  className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold text-left transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>💰</span>
                   <span className="truncate">{language === 'kn' ? 'ಬೆಲೆಯ ಸಮಸ್ಯೆ?' : 'Price Problem?'}</span>

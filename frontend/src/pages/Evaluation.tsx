@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { runEvaluation, listEvaluationRuns, getEvaluationReport, ensureAuthToken } from '../api/client'
 import type { EvaluationReport } from '../types'
+import { ModelStatusCard } from '../components/ModelStatusCard'
 
 export default function Evaluation() {
   const [report, setReport] = useState<EvaluationReport | null>(null)
@@ -72,6 +73,9 @@ export default function Evaluation() {
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
+      {/* 5 AI Models Live Status Architecture Banner */}
+      <ModelStatusCard />
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
         <div>

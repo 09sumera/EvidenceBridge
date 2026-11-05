@@ -6,6 +6,8 @@ and querying claims and their associated provenance.
 
 import os
 import re
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
@@ -26,14 +28,17 @@ from app.models.schemas import (
     Claim,
     ClaimHighlight,
     DecisionOverview,
+    EmergencySOSRecord,
     GapsAndRisks,
     GuidelineSupportOverview,
+    HospitalAvailabilityResponse,
     InsightsSummaryResponse,
     LocationFrequency,
     PriceAlertsOverview,
     ProcedureFrequency,
     VerificationResult,
 )
+from app.services.emergency_guidelines import get_emergency_protocol
 from app.utils.logger import logger
 
 
@@ -56,6 +61,8 @@ class StorageService:
         self._trust_density_collection: Optional[AsyncIOMotorCollection] = None
         self._evaluations_collection: Optional[AsyncIOMotorCollection] = None
         self._community_stories_collection: Optional[AsyncIOMotorCollection] = None
+        self._availability_collection: Optional[AsyncIOMotorCollection] = None
+        self._sos_collection: Optional[AsyncIOMotorCollection] = None
 
         # In-memory users for offline / test environments
         self._in_memory_users: dict[str, dict[str, Any]] = {}
@@ -80,6 +87,8 @@ class StorageService:
         self._in_memory_audit_trails: list[AuditTrail] = []
         self._in_memory_evaluations: list[dict[str, Any]] = [self._build_default_baseline_evaluation_run()]
         self._in_memory_trust_density: dict[str, dict[str, Any]] = self._build_default_indian_trust_records()
+        self._in_memory_availability: dict[str, dict[str, Any]] = {}
+        self._in_memory_sos: dict[str, dict[str, Any]] = {}
 
     def _build_default_baseline_evaluation_run(self) -> dict[str, Any]:
         """Pre-populate a gold-standard baseline evaluation report."""
@@ -840,6 +849,8 @@ class StorageService:
         self._trust_density_collection = self._db[self.settings.MONGODB_TRUST_DENSITY_COLLECTION]
         self._evaluations_collection = self._db[self.settings.MONGODB_EVALUATIONS_COLLECTION]
         self._community_stories_collection = self._db[self.settings.MONGODB_COMMUNITY_STORIES_COLLECTION]
+        self._availability_collection = self._db["hospital_availability"]
+        self._sos_collection = self._db["emergency_sos"]
 
         try:
             # Ping database to verify connection
@@ -862,6 +873,8 @@ class StorageService:
             self._trust_density_collection = None
             self._evaluations_collection = None
             self._community_stories_collection = None
+            self._availability_collection = None
+            self._sos_collection = None
 
     async def close(self) -> None:
         """Close MongoDB connection pool."""
@@ -876,6 +889,8 @@ class StorageService:
             self._trust_density_collection = None
             self._evaluations_collection = None
             self._community_stories_collection = None
+            self._availability_collection = None
+            self._sos_collection = None
             logger.info("MongoDB connection closed")
 
     async def _ensure_indexes(self) -> None:
@@ -995,6 +1010,24 @@ class StorageService:
                 logger.info("Seeded canonical Indian recovery stories into MongoDB community_stories")
             except Exception as e:
                 logger.warning(f"Failed to ensure MongoDB indexes on community_stories: {e}")
+
+        if self._availability_collection is not None:
+            try:
+                await self._availability_collection.create_index("hospital_id", unique=True)
+                await self._availability_collection.create_index("last_updated")
+                logger.info("MongoDB indexes verified on collection 'hospital_availability'")
+            except Exception as e:
+                logger.warning(f"Failed to ensure MongoDB indexes on hospital_availability: {e}")
+
+        if self._sos_collection is not None:
+            try:
+                await self._sos_collection.create_index("sos_id", unique=True)
+                await self._sos_collection.create_index("hospital_id")
+                await self._sos_collection.create_index("status")
+                await self._sos_collection.create_index("created_at")
+                logger.info("MongoDB indexes verified on collection 'emergency_sos'")
+            except Exception as e:
+                logger.warning(f"Failed to ensure MongoDB indexes on emergency_sos: {e}")
 
     async def check_health(self) -> dict[str, Any]:
         """Check MongoDB connection and return status."""
@@ -1288,6 +1321,84 @@ class StorageService:
 
         # In-memory fallback
         return len(self._filter_in_memory_claims(location=location, user_id=user_id))
+
+    def get_claims_by_provider_in_memory(
+        self,
+        provider_identifier: str,
+        limit: int = 100,
+    ) -> list[Claim]:
+        """
+        Synchronous in-memory lookup of historical claims matching a provider name, hospital name, or ID.
+        Used for fast fallback and offline/test environments without database connections.
+        """
+        clean_id = (provider_identifier or "").strip().lower()
+        if not clean_id or len(clean_id) < 2:
+            return []
+
+        matched: list[Claim] = []
+        for c in self._in_memory_claims:
+            loc = c.get("location") or {}
+            norm_key = (loc.get("normalized_key") or "").lower()
+            text = (c.get("original_text") or "").lower()
+            ext = c.get("extracted_fields") or {}
+            entity = (ext.get("entity") or "").lower()
+            hosp = (ext.get("hospital_name") or "").lower()
+            pname = (ext.get("provider_name") or "").lower()
+            # Match by normalized provider/hospital identity, NOT solely on generic city name
+            if (
+                clean_id in entity
+                or clean_id in hosp
+                or clean_id in pname
+                or clean_id in text
+                or (clean_id in norm_key and not any(clean_id == k for k in ["davangere", "bengaluru", "bangalore", "ballari", "mysuru", "mangaluru", "belagavi", "karnataka"]))
+            ):
+                try:
+                    matched.append(Claim.model_validate(c))
+                except Exception as val_err:
+                    logger.debug(f"Failed to validate in-memory claim: {val_err}")
+            if len(matched) >= limit:
+                break
+        return matched
+
+    async def get_claims_by_provider(
+        self,
+        provider_identifier: str,
+        limit: int = 100,
+    ) -> list[Claim]:
+        """
+        Retrieve historical claims matching a provider name, hospital name, or provider ID.
+        Queries MongoDB collection if connected, otherwise filters in-memory store.
+        """
+        clean_id = (provider_identifier or "").strip()
+        if not clean_id or len(clean_id) < 2:
+            return []
+
+        # If MongoDB is available, search with case-insensitive regex
+        if self._collection is not None and self._db is not None:
+            try:
+                regex_pattern = {"$regex": re.escape(clean_id), "$options": "i"}
+                # Match provider identity without combining unrelated hospitals across a generic city
+                query = {
+                    "$or": [
+                        {"extracted_fields.entity": regex_pattern},
+                        {"extracted_fields.hospital_name": regex_pattern},
+                        {"extracted_fields.provider_name": regex_pattern},
+                        {"original_text": regex_pattern},
+                    ]
+                }
+                cursor = self.collection.find(query, {"_id": 0}).sort("timestamp", -1).limit(limit)
+                claims: list[Claim] = []
+                async for doc in cursor:
+                    try:
+                        claims.append(Claim.model_validate(doc))
+                    except Exception as val_err:
+                        logger.debug(f"Failed to validate historical claim document: {val_err}")
+                return claims
+            except Exception as e:
+                logger.warning(f"Database query in get_claims_by_provider failed: {e}. Falling back to in-memory.")
+
+        # In-memory fallback
+        return self.get_claims_by_provider_in_memory(clean_id, limit=limit)
 
     async def insert_verification(self, verification: VerificationResult) -> VerificationResult:
         """
@@ -1868,21 +1979,29 @@ class StorageService:
         """Calculate statistical summaries across claims and verification documents."""
         claims_by_id = {c.get("claim_id"): c for c in claims_docs if c.get("claim_id")}
 
-        # 1. Decision Overview (with robust synonym matching)
+        def _normalize_enum_str(val: Any) -> str:
+            if hasattr(val, "value"):
+                return str(val.value).lower().strip()
+            s = str(val or "").lower().strip()
+            if "." in s:
+                s = s.split(".")[-1]
+            return s
+
+        # 1. Decision Overview (with robust synonym & enum matching)
         approved = sum(
             1 for v in verifs_docs
-            if str(v.get("action", "")).lower() in ["accept", "approved", "approve", "passed"]
-            or (not v.get("action") and str(v.get("verdict", "")).lower() == "supported")
+            if _normalize_enum_str(v.get("action")) in ["accept", "approved", "approve", "passed"]
+            or (not v.get("action") and _normalize_enum_str(v.get("verdict")) in ["supported", "support"])
         )
         flagged = sum(
             1 for v in verifs_docs
-            if str(v.get("action", "")).lower() in ["flag", "flagged", "warn", "warning"]
-            or (not v.get("action") and str(v.get("verdict", "")).lower() == "contradicted")
+            if _normalize_enum_str(v.get("action")) in ["flag", "flagged", "warn", "warning"]
+            or (not v.get("action") and _normalize_enum_str(v.get("verdict")) in ["contradicted", "contradict"])
         )
         held = sum(
             1 for v in verifs_docs
-            if str(v.get("action", "")).lower() in ["abstain", "held", "hold", "refused"]
-            or (not v.get("action") and str(v.get("verdict", "")).lower() in ["insufficient_evidence", "inconclusive"])
+            if _normalize_enum_str(v.get("action")) in ["abstain", "held", "hold", "refused"]
+            or (not v.get("action") and _normalize_enum_str(v.get("verdict")) in ["insufficient_evidence", "inconclusive", "insufficient"])
         )
         total_verified = len(verifs_docs)
 
@@ -1922,25 +2041,25 @@ class StorageService:
             total=total_verified,
         )
 
-        # 3. Guideline Support Overview (with robust synonym matching)
+        # 3. Guideline Support Overview (with robust synonym & enum matching)
         supported = sum(
             1 for v in verifs_docs
-            if str(v.get("verdict", "")).lower() in ["supported", "support", "approved"]
-            or (not v.get("verdict") and str(v.get("action", "")).lower() in ["accept", "approved"])
+            if _normalize_enum_str(v.get("verdict")) in ["supported", "support", "approved"]
+            or (not v.get("verdict") and _normalize_enum_str(v.get("action")) in ["accept", "approved"])
         )
         partially = sum(
             1 for v in verifs_docs
-            if str(v.get("verdict", "")).lower() in ["partially_supported", "partially", "partial"]
+            if _normalize_enum_str(v.get("verdict")) in ["partially_supported", "partially", "partial"]
         )
         contradicted = sum(
             1 for v in verifs_docs
-            if str(v.get("verdict", "")).lower() in ["contradicted", "contradict", "unsupported"]
-            or (not v.get("verdict") and str(v.get("action", "")).lower() in ["flag", "flagged"])
+            if _normalize_enum_str(v.get("verdict")) in ["contradicted", "contradict", "unsupported"]
+            or (not v.get("verdict") and _normalize_enum_str(v.get("action")) in ["flag", "flagged"])
         )
         insufficient = sum(
             1 for v in verifs_docs
-            if str(v.get("verdict", "")).lower() in ["insufficient_evidence", "insufficient", "inconclusive", "held"]
-            or (not v.get("verdict") and str(v.get("action", "")).lower() in ["abstain", "held"])
+            if _normalize_enum_str(v.get("verdict")) in ["insufficient_evidence", "insufficient", "inconclusive", "held"]
+            or (not v.get("verdict") and _normalize_enum_str(v.get("action")) in ["abstain", "held"])
         )
 
         guideline_overview = GuidelineSupportOverview(
@@ -2138,6 +2257,243 @@ class StorageService:
             ],
             is_baseline_fallback=True,
         )
+
+    # -----------------------------------------------------------------------
+    # Live Hospital Availability & Emergency SOS Storage Operations
+    # -----------------------------------------------------------------------
+
+    async def save_hospital_availability(
+        self,
+        hospital_id: str,
+        hospital_name: str,
+        doctors_available: int,
+        emergency_doctors: int,
+        nurses_available: int,
+        duty_status: str,
+        emergency_nurses: int = 0,
+        department_specialists: Optional[dict[str, int]] = None,
+        available_beds: Optional[int] = None,
+        icu_beds_available: Optional[int] = None,
+        emergency_dept_status: str = "Operational",
+        notes: Optional[str] = None,
+        updated_by: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Save or update live doctor/nurse/bed availability and duty status for a hospital in MongoDB and cache."""
+        now = datetime.now(timezone.utc)
+        record: dict[str, Any] = {
+            "hospital_id": hospital_id,
+            "hospital_name": hospital_name,
+            "doctors_available": int(doctors_available),
+            "emergency_doctors": int(emergency_doctors),
+            "nurses_available": int(nurses_available),
+            "emergency_nurses": int(emergency_nurses),
+            "department_specialists": department_specialists or {},
+            "available_beds": available_beds,
+            "icu_beds_available": icu_beds_available,
+            "emergency_dept_status": emergency_dept_status or "Operational",
+            "duty_status": duty_status,
+            "notes": notes,
+            "updated_by": updated_by,
+            "last_updated": now,
+        }
+
+        # In-memory save
+        self._in_memory_availability[hospital_id] = dict(record)
+
+        # MongoDB save
+        if self._availability_collection is not None:
+            try:
+                await self._availability_collection.update_one(
+                    {"hospital_id": hospital_id},
+                    {"$set": record},
+                    upsert=True,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist hospital availability to MongoDB: {e}")
+
+        ret = dict(record)
+        ret.pop("_id", None)
+        return ret
+
+    async def get_hospital_availability(self, hospital_id: str) -> Optional[dict[str, Any]]:
+        """Retrieve real-time availability for a single hospital."""
+        if self._availability_collection is not None:
+            try:
+                doc = await self._availability_collection.find_one(
+                    {"hospital_id": hospital_id},
+                    {"_id": 0},
+                )
+                if doc:
+                    return doc
+            except Exception as e:
+                logger.warning(f"Failed to fetch hospital availability from MongoDB: {e}")
+
+        rec = self._in_memory_availability.get(hospital_id)
+        if rec:
+            ret = dict(rec)
+            ret.pop("_id", None)
+            return ret
+        return None
+
+    async def get_all_hospital_availabilities(self) -> list[dict[str, Any]]:
+        """Retrieve real-time availability for all updated hospitals."""
+        if self._availability_collection is not None:
+            try:
+                cursor = self._availability_collection.find({}, {"_id": 0})
+                results = await cursor.to_list(length=200)
+                if results:
+                    return results
+            except Exception as e:
+                logger.warning(f"Failed to fetch all hospital availabilities from MongoDB: {e}")
+
+        res = []
+        for v in self._in_memory_availability.values():
+            item = dict(v)
+            item.pop("_id", None)
+            res.append(item)
+        return res
+
+    async def create_sos_request(
+        self,
+        emergency_type: str,
+        hospital_id: str,
+        hospital_name: str,
+        patient_name: str,
+        patient_phone: str,
+        description: Optional[str] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
+        address: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Create a new emergency SOS distress call with clinical emergency protocol attached."""
+        sos_id = f"sos_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        now = datetime.now(timezone.utc)
+        
+        # Clinical protocol retrieval
+        clinical_proto = get_emergency_protocol(emergency_type)
+
+        record: dict[str, Any] = {
+            "sos_id": sos_id,
+            "emergency_type": emergency_type,
+            "hospital_id": hospital_id,
+            "hospital_name": hospital_name,
+            "patient_name": patient_name,
+            "patient_phone": patient_phone,
+            "description": description,
+            "latitude": latitude,
+            "longitude": longitude,
+            "address": address,
+            "status": "PENDING",
+            "created_at": now,
+            "updated_at": now,
+            "acknowledged_at": None,
+            "resolved_at": None,
+            "response_notes": None,
+            "clinical_protocol": clinical_proto,
+        }
+
+        # In-memory save
+        self._in_memory_sos[sos_id] = dict(record)
+
+        # MongoDB save
+        if self._sos_collection is not None:
+            try:
+                db_record = dict(record)
+                await self._sos_collection.insert_one(db_record)
+            except Exception as e:
+                logger.warning(f"Failed to persist SOS record to MongoDB: {e}")
+
+        ret = dict(record)
+        ret.pop("_id", None)
+        return ret
+
+    async def get_sos_request(self, sos_id: str) -> Optional[dict[str, Any]]:
+        """Retrieve a specific SOS record by ID."""
+        if self._sos_collection is not None:
+            try:
+                doc = await self._sos_collection.find_one({"sos_id": sos_id}, {"_id": 0})
+                if doc:
+                    return doc
+            except Exception as e:
+                logger.warning(f"Failed to fetch SOS request from MongoDB: {e}")
+
+        rec = self._in_memory_sos.get(sos_id)
+        if rec:
+            ret = dict(rec)
+            ret.pop("_id", None)
+            return ret
+        return None
+
+    async def get_hospital_sos_requests(self, hospital_id: Optional[str] = None) -> list[dict[str, Any]]:
+        """Retrieve incoming SOS requests, optionally filtered by hospital_id."""
+        if self._sos_collection is not None:
+            try:
+                query: dict[str, Any] = {}
+                if hospital_id and hospital_id.lower() != "all":
+                    query["hospital_id"] = hospital_id
+                cursor = self._sos_collection.find(query, {"_id": 0}).sort("created_at", -1)
+                results = await cursor.to_list(length=100)
+                if results is not None:
+                    return results
+            except Exception as e:
+                logger.warning(f"Failed to fetch hospital SOS requests from MongoDB: {e}")
+
+        items = list(self._in_memory_sos.values())
+        if hospital_id and hospital_id.lower() != "all":
+            items = [item for item in items if item.get("hospital_id") == hospital_id]
+        items.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+        clean_items = []
+        for item in items:
+            c = dict(item)
+            c.pop("_id", None)
+            clean_items.append(c)
+        return clean_items
+
+    async def update_sos_status(
+        self,
+        sos_id: str,
+        new_status: str,
+        response_notes: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Update the dispatch/triage status of an SOS request (ACKNOWLEDGED, RESPONDING, RESOLVED)."""
+        now = datetime.now(timezone.utc)
+        record = await self.get_sos_request(sos_id)
+        if not record:
+            return None
+
+        update_fields: dict[str, Any] = {
+            "status": new_status,
+            "updated_at": now,
+        }
+        if response_notes is not None:
+            update_fields["response_notes"] = response_notes
+        if new_status == "ACKNOWLEDGED" and not record.get("acknowledged_at"):
+            update_fields["acknowledged_at"] = now
+        elif new_status == "RESOLVED" and not record.get("resolved_at"):
+            update_fields["resolved_at"] = now
+
+        # Update in-memory
+        if sos_id in self._in_memory_sos:
+            self._in_memory_sos[sos_id].update(update_fields)
+            updated_record = self._in_memory_sos[sos_id]
+        else:
+            record.update(update_fields)
+            self._in_memory_sos[sos_id] = record
+            updated_record = record
+
+        # Update MongoDB
+        if self._sos_collection is not None:
+            try:
+                await self._sos_collection.update_one(
+                    {"sos_id": sos_id},
+                    {"$set": update_fields},
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update SOS status in MongoDB: {e}")
+
+        ret = dict(updated_record)
+        ret.pop("_id", None)
+        return ret
 
 
 # Global singleton instance for application lifecycle

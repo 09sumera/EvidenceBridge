@@ -82,7 +82,8 @@ app.add_middleware(
 # Mount routes at root for simplicity as specified in requirements
 app.include_router(api_router, tags=["Foundational Claims Engine"])
 
-# Mount routes under /api/v1 for standard API versioning
+# Mount routes under /api and /api/v1 for unified frontend API calls
+app.include_router(api_router, prefix="/api", tags=["API"])
 app.include_router(api_router, prefix="/api/v1", tags=["Version 1"])
 
 

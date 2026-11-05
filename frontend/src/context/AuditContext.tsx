@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react'
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react'
 import type { ExtractAndVerifyResponse, SourceType } from '../types'
+import { useAuth } from './AuthContext'
 
 interface AuditContextType {
   result: ExtractAndVerifyResponse | null
@@ -19,8 +20,6 @@ interface AuditContextType {
   clearAudit: () => void
 }
 
-const AUDIT_STORAGE_KEY = 'evidencebridge_active_audit'
-
 const AuditContext = createContext<AuditContextType | undefined>(undefined)
 
 interface PersistedAuditState {
@@ -33,103 +32,64 @@ interface PersistedAuditState {
 }
 
 export function AuditProvider({ children }: { children: React.ReactNode }) {
-  // Load persisted audit state synchronously on initialization
-  const [result, setResultState] = useState<ExtractAndVerifyResponse | null>(() => {
+  const { user } = useAuth()
+  const currentEmailKey = user?.email ? user.email.trim().toLowerCase() : 'guest'
+  const prevEmailKeyRef = useRef<string>(currentEmailKey)
+
+  const getStorageKey = (emailKey: string) => `eb_active_audit_${emailKey}`
+
+  const loadState = (emailKey: string): PersistedAuditState => {
     try {
       if (typeof window !== 'undefined') {
-        const stored = sessionStorage.getItem(AUDIT_STORAGE_KEY)
+        const stored = sessionStorage.getItem(getStorageKey(emailKey))
         if (stored) {
-          const parsed = JSON.parse(stored) as PersistedAuditState
-          return parsed.result || null
+          return JSON.parse(stored) as PersistedAuditState
         }
       }
     } catch {
-      // Storage access might fail
+      // ignore
     }
-    return null
-  })
-
-  const [text, setTextState] = useState<string>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const stored = sessionStorage.getItem(AUDIT_STORAGE_KEY)
-        if (stored) {
-          const parsed = JSON.parse(stored) as PersistedAuditState
-          return parsed.text || ''
-        }
-      }
-    } catch {
-      // Storage access might fail
+    return {
+      result: null,
+      text: '',
+      sourceType: 'hospital_bill',
+      sourceUrl: '',
+      activePreset: null,
+      imageName: null,
     }
-    return ''
-  })
+  }
 
-  const [sourceType, setSourceTypeState] = useState<SourceType>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const stored = sessionStorage.getItem(AUDIT_STORAGE_KEY)
-        if (stored) {
-          const parsed = JSON.parse(stored) as PersistedAuditState
-          return parsed.sourceType || 'hospital_bill'
-        }
-      }
-    } catch {
-      // Storage access might fail
-    }
-    return 'hospital_bill'
-  })
+  const initial = loadState(currentEmailKey)
 
-  const [sourceUrl, setSourceUrlState] = useState<string>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const stored = sessionStorage.getItem(AUDIT_STORAGE_KEY)
-        if (stored) {
-          const parsed = JSON.parse(stored) as PersistedAuditState
-          return parsed.sourceUrl || ''
-        }
-      }
-    } catch {
-      // Storage access might fail
-    }
-    return ''
-  })
-
-  const [activePreset, setActivePresetState] = useState<string | null>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const stored = sessionStorage.getItem(AUDIT_STORAGE_KEY)
-        if (stored) {
-          const parsed = JSON.parse(stored) as PersistedAuditState
-          return parsed.activePreset || null
-        }
-      }
-    } catch {
-      // Storage access might fail
-    }
-    return null
-  })
-
+  const [result, setResultState] = useState<ExtractAndVerifyResponse | null>(initial.result)
+  const [text, setTextState] = useState<string>(initial.text)
+  const [sourceType, setSourceTypeState] = useState<SourceType>(initial.sourceType)
+  const [sourceUrl, setSourceUrlState] = useState<string>(initial.sourceUrl)
+  const [activePreset, setActivePresetState] = useState<string | null>(initial.activePreset)
   const [imagePreview, setImagePreviewState] = useState<string | null>(null)
-  const [imageName, setImageNameState] = useState<string | null>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const stored = sessionStorage.getItem(AUDIT_STORAGE_KEY)
-        if (stored) {
-          const parsed = JSON.parse(stored) as PersistedAuditState
-          return parsed.imageName || null
-        }
-      }
-    } catch {
-      // Storage access might fail
-    }
-    return null
-  })
+  const [imageName, setImageNameState] = useState<string | null>(initial.imageName)
 
-  // Persist whenever state changes
+  // When active user switches (e.g. Patient logs out and Hospital logs in), switch audit buffer
+  useEffect(() => {
+    if (prevEmailKeyRef.current !== currentEmailKey) {
+      prevEmailKeyRef.current = currentEmailKey
+      const userState = loadState(currentEmailKey)
+      setResultState(userState.result)
+      setTextState(userState.text)
+      setSourceTypeState(userState.sourceType)
+      setSourceUrlState(userState.sourceUrl)
+      setActivePresetState(userState.activePreset)
+      setImagePreviewState(null)
+      setImageNameState(userState.imageName)
+    }
+  }, [currentEmailKey])
+
+  // Persist whenever state changes for current email
   useEffect(() => {
     try {
       if (typeof window !== 'undefined') {
-        if (result || text || activePreset) {
+        const key = getStorageKey(currentEmailKey)
+        if (result || text || activePreset || imageName) {
           const stateToSave: PersistedAuditState = {
             result,
             text,
@@ -138,15 +98,15 @@ export function AuditProvider({ children }: { children: React.ReactNode }) {
             activePreset,
             imageName,
           }
-          sessionStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(stateToSave))
+          sessionStorage.setItem(key, JSON.stringify(stateToSave))
         } else {
-          sessionStorage.removeItem(AUDIT_STORAGE_KEY)
+          sessionStorage.removeItem(key)
         }
       }
     } catch {
       // Storage quota or restriction
     }
-  }, [result, text, sourceType, sourceUrl, activePreset, imageName])
+  }, [result, text, sourceType, sourceUrl, activePreset, imageName, currentEmailKey])
 
   const setResult = (res: ExtractAndVerifyResponse | null) => {
     setResultState(res)
@@ -179,14 +139,14 @@ export function AuditProvider({ children }: { children: React.ReactNode }) {
   const clearAudit = () => {
     setResultState(null)
     setTextState('')
+    setSourceTypeState('hospital_bill')
+    setSourceUrlState('')
     setActivePresetState(null)
     setImagePreviewState(null)
     setImageNameState(null)
-    setSourceUrlState('')
     try {
       if (typeof window !== 'undefined') {
-        sessionStorage.removeItem(AUDIT_STORAGE_KEY)
-        localStorage.removeItem(AUDIT_STORAGE_KEY)
+        sessionStorage.removeItem(getStorageKey(currentEmailKey))
       }
     } catch {
       // ignore

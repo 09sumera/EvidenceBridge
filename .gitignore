@@ -71,3 +71,37 @@ scratch/
 __pycache__/
 .pytest_cache/
 .coverage
+# Python environments
+.venv/
+.venv_old/
+
+# Model weights and checkpoints
+models/
+evidencebridge-model3-deberta-v1/
+evidencebridge-model4-anomaly/
+evidencebridge-model5-claim-anomaly/
+
+# Local model caches
+data/bge/
+
+# Backups and archives
+backups/
+frontend.zip
+
+# Training artifacts
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Generated outputs
+__pycache__/
+.pytest_cache/
+chroma_db/
+backend/chroma_db/
+# Temporary protection: unverified healthcare demo and NER datasets
+data/evaluation/
+data/ner_v2/
+data/ner_v3/
+data/ner_v4/

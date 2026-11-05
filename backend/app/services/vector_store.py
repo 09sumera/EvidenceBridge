@@ -32,10 +32,22 @@ class VectorStoreService:
                 path=self.persist_directory,
                 settings=ChromaSettings(anonymized_telemetry=False)
             )
-            self._collection = self._client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"description": "EvidenceBridge Claims Vector Store"}
-            )
+            ef = None
+            try:
+                from app.services.embedding import embedding_service
+                ef = embedding_service.get_chroma_embedding_function()
+            except Exception as ef_err:
+                logger.debug(f"Could not load BGE embedding function for ChromaDB: {ef_err}")
+
+            try:
+                self._collection = self._client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"description": "EvidenceBridge Claims Vector Store"},
+                    embedding_function=ef
+                )
+            except Exception as coll_err:
+                logger.debug(f"Opening existing collection '{self.collection_name}' without overriding embedding function: {coll_err}")
+                self._collection = self._client.get_collection(name=self.collection_name)
             logger.info(f"ChromaDB collection '{self.collection_name}' ready with {self._collection.count()} vectors")
             return True
         except Exception as e:

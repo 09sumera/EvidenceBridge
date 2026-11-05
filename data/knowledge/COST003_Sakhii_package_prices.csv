@@ -1,0 +1,46 @@
+Source_ID,Hospital_Name,District,Procedure_Package,Room_Category,Package_Duration_Days,Quoted_Price_INR,Price_Type,Source_URL,Source_Retrieval_Date,Package_Inclusions_Verified,Package_Exclusions_Verified,Complete_Package_Confirmed,Training_Eligibility
+COST003,Sakhii Hospital,Bengaluru,Normal Delivery,Private,4,66400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Normal Delivery,Deluxe,4,74200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Normal Delivery,Suite,4,88000,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,LSCS,Private,4,91800,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,LSCS,Deluxe,4,99500,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,LSCS,Suite,4,116600,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,LSCS + Tubectomy,Private,4,106800,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,LSCS + Tubectomy,Deluxe,4,117500,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,LSCS + Tubectomy,Suite,4,136600,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,D & C,Private,4,30600,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,D & C,Deluxe,4,37400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,D & C,Suite,4,44400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,"Hysteroscopic Polypectomy, D&C",Private,4,50200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,"Hysteroscopic Polypectomy, D&C",Deluxe,4,57300,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,"Hysteroscopic Polypectomy, D&C",Suite,4,61400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Ruptured Ectopic Pregnancy,Private,4,92900,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Ruptured Ectopic Pregnancy,Deluxe,4,117400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Ruptured Ectopic Pregnancy,Suite,4,122600,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Ectopic Pregnancy,Private,4,113200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Ectopic Pregnancy,Deluxe,4,126300,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Ectopic Pregnancy,Suite,4,145400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Diagnostic,Private,4,77200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Diagnostic,Deluxe,4,90500,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Diagnostic,Suite,4,104400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Myomectomy,Private,4,95400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Myomectomy,Deluxe,4,119400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Myomectomy,Suite,4,130800,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Myomectomy,Private,4,117200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Myomectomy,Deluxe,4,127400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Myomectomy,Suite,4,136600,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Ovarian Cystectomy,Private,4,103900,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Ovarian Cystectomy,Deluxe,4,118200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Ovarian Cystectomy,Suite,4,124600,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Ovarian Cystectomy Endometriosis,Private,4,118400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Ovarian Cystectomy Endometriosis,Deluxe,4,130500,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Laparoscopic Ovarian Cystectomy Endometriosis,Suite,4,144200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Vaginal Hysterectomy,Private,4,108400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Vaginal Hysterectomy,Deluxe,4,126500,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Vaginal Hysterectomy,Suite,4,138200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Pelvic Floor Repair (Vaginal Hysterectomy),Private,4,120400,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Pelvic Floor Repair (Vaginal Hysterectomy),Deluxe,4,134300,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Pelvic Floor Repair (Vaginal Hysterectomy),Suite,4,148600,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Hysterectomy (BSO),Private,4,112000,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Hysterectomy (BSO),Deluxe,4,130500,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION
+COST003,Sakhii Hospital,Bengaluru,Open Hysterectomy (BSO),Suite,4,136200,Published_Hospital_Package,https://sakhiihospital.in/packages/,2026-11-01,NO,NO,NO,PENDING_SCOPE_VALIDATION

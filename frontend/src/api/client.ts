@@ -12,13 +12,25 @@ import {
   CommunityStory,
   CommunityStoryCreate,
   CommunityStoryListResponse,
+  DocumentImageProcessResponse,
+  ExtractedEntity,
   ExtractionRequest,
   ExtractionResponse,
   ExtractAndVerifyResponse,
   HealthResponse,
   InsightsSummaryResponse,
+  MedicineSubstitutionResult,
+  Model6PredictionResult,
+  ModelStatusResponse,
+  NERExtractionResult,
+  NLIResult,
+  ProviderAnomalyResult,
+  ClaimAnomalyResult,
+  RetrievalResultPassage,
   TrustDensityListResponse,
   TrustDensityResponse,
+  UnifiedAuditReport,
+  UnifiedAuditRequest,
   UserCreateRequest,
   UserLoginRequest,
   UserResponse,
@@ -46,6 +58,41 @@ try {
   }
 } catch {
   // Storage access might be restricted in some iframe / sandboxed environments
+}
+
+export function isInvalidToken(token: string | null): boolean {
+  if (!token || !token.trim()) return true
+  const t = token.trim()
+  if (
+    t === 'demo_patient_token' ||
+    t === 'demo_hospital_token' ||
+    t.startsWith('otp_token_') ||
+    t.startsWith('usr_token_') ||
+    t.startsWith('local_token_') ||
+    t.startsWith('token_')
+  ) {
+    return true
+  }
+
+  // Check if JWT token has expired or is nearing expiration
+  if (t.includes('.')) {
+    try {
+      const parts = t.split('.')
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+        if (payload.exp && typeof payload.exp === 'number') {
+          // If expired (or expiring in under 60 seconds), treat as invalid to trigger refresh
+          if (Date.now() >= payload.exp * 1000 - 60000) {
+            return true
+          }
+        }
+      }
+    } catch {
+      // Ignore parse failure; allow backend to validate
+    }
+  }
+
+  return false
 }
 
 export function getAuthToken(): string | null {
@@ -90,17 +137,18 @@ export function setAuthToken(token: string | null): void {
 
 /**
  * Ensures a valid session token exists before issuing protected requests.
- * If user is unauthenticated, acquires a canonical Demo Auditor session
- * to prevent 401 Unauthorized errors on first load.
+ * Checks for invalid or stale tokens and acquires a valid JWT or canonical
+ * pre-authorized demo token ('demo_bearer_token') to prevent 401 Unauthorized errors.
  */
-export async function ensureAuthToken(): Promise<string | null> {
+export async function ensureAuthToken(forceRefresh = false): Promise<string> {
   const existing = getAuthToken()
-  if (existing) {
+  if (existing && !forceRefresh && !isInvalidToken(existing)) {
     return existing
   }
 
   if (autoDemoPromise) {
-    return autoDemoPromise
+    const res = await autoDemoPromise
+    return res || 'demo_bearer_token'
   }
 
   autoDemoPromise = (async () => {
@@ -113,21 +161,6 @@ export async function ensureAuthToken(): Promise<string | null> {
         const data = await res.json()
         if (data?.access_token) {
           setAuthToken(data.access_token)
-          if (typeof window !== 'undefined' && data.user) {
-            try {
-              const u = {
-                id: data.user.user_id,
-                name: data.user.name,
-                email: data.user.email,
-                role: data.user.role,
-                organization: data.user.organization,
-              }
-              localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(u))
-              sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(u))
-            } catch {
-              // ignore
-            }
-          }
           return data.access_token
         }
       }
@@ -137,15 +170,16 @@ export async function ensureAuthToken(): Promise<string | null> {
       autoDemoPromise = null
     }
 
-    // Ultimate offline fallback token recognizable by backend
+    // Ultimate fallback token pre-authorized by backend decode_access_token()
     setAuthToken('demo_bearer_token')
     return 'demo_bearer_token'
   })()
 
-  return autoDemoPromise
+  const result = await autoDemoPromise
+  return result || 'demo_bearer_token'
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit, isRetry = false): Promise<T> {
   // Public endpoints do not require an Authorization header
   const isPublic =
     path.startsWith('/health') ||
@@ -154,7 +188,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     path.startsWith('/auth/demo')
 
   let token = getAuthToken()
-  if (!token && !isPublic) {
+  if ((!token || isInvalidToken(token)) && !isPublic) {
     token = await ensureAuthToken()
   }
 
@@ -171,6 +205,20 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     },
     ...init,
   })
+
+  // Self-healing: if session expired or rejected with 401, auto-refresh token and retry once
+  if (res.status === 401 && !isRetry && !isPublic) {
+    console.warn(`[EvidenceBridge API] 401 Unauthorized for ${path}. Refreshing session token and retrying...`)
+    setAuthToken(null)
+    const freshToken = await ensureAuthToken(true)
+    if (freshToken) {
+      const retryHeaders = { ...(init?.headers ?? {}) } as Record<string, string>
+      delete retryHeaders['Authorization']
+      delete retryHeaders['authorization']
+      return apiFetch<T>(path, { ...init, headers: retryHeaders }, true)
+    }
+  }
+
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
     try {
@@ -378,5 +426,245 @@ export function demoAuthApi(): Promise<AuthResponse> {
 export function getMeApi(): Promise<UserResponse> {
   return apiFetch<UserResponse>('/auth/me')
 }
+
+// ---------------------------------------------------------------------------
+// Five AI Models & Unified Audit Client Methods
+// ---------------------------------------------------------------------------
+
+export function getModelsStatus(): Promise<ModelStatusResponse> {
+  return apiFetch<ModelStatusResponse>('/models/status')
+}
+
+export function runUnifiedAudit(req: UnifiedAuditRequest): Promise<UnifiedAuditReport> {
+  return apiFetch<UnifiedAuditReport>('/audit/unified', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export function extractNER(text: string): Promise<NERExtractionResult> {
+  return apiFetch<NERExtractionResult>('/models/ner/extract', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+}
+
+export function queryRetrieval(query: string, k = 5): Promise<RetrievalResultPassage[]> {
+  return apiFetch<RetrievalResultPassage[]>('/models/retrieval/query', {
+    method: 'POST',
+    body: JSON.stringify({ query, k }),
+  })
+}
+
+export function predictNLI(premise: string, hypothesis: string): Promise<NLIResult> {
+  return apiFetch<NLIResult>('/models/nli/predict', {
+    method: 'POST',
+    body: JSON.stringify({ premise, hypothesis }),
+  })
+}
+
+export function screenProviderAnomaly(
+  providerData: Record<string, unknown>,
+): Promise<ProviderAnomalyResult> {
+  return apiFetch<ProviderAnomalyResult>('/models/anomaly/provider', {
+    method: 'POST',
+    body: JSON.stringify(providerData),
+  })
+}
+
+export function screenClaimAnomaly(
+  claimData: Record<string, unknown>,
+): Promise<ClaimAnomalyResult> {
+  return apiFetch<ClaimAnomalyResult>('/models/anomaly/claim', {
+    method: 'POST',
+    body: JSON.stringify(claimData),
+  })
+}
+
+export function matchMedicine(
+  queryMedicine: string,
+  targetMedicine: string,
+): Promise<MedicineSubstitutionResult> {
+  return apiFetch<MedicineSubstitutionResult>('/models/medicine/match', {
+    method: 'POST',
+    body: JSON.stringify({
+      query_medicine: queryMedicine,
+      target_medicine: targetMedicine,
+    }),
+  })
+}
+
+export interface OCRResult {
+  text: string
+  confidence: number
+  lines: Array<{
+    text: string
+    confidence: number
+    box: number[][]
+  }>
+}
+
+export function extractOCR(imageBase64: string): Promise<OCRResult> {
+  return apiFetch<OCRResult>('/ocr/extract', {
+    method: 'POST',
+    body: JSON.stringify({ image_base64: imageBase64 }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Model 6: Image-Based Medical Document AI Client Methods
+// ---------------------------------------------------------------------------
+
+export function classifyDocumentImage(imageBase64: string): Promise<Model6PredictionResult> {
+  return apiFetch<Model6PredictionResult>('/model6/classify', {
+    method: 'POST',
+    body: JSON.stringify({ image_base64: imageBase64 }),
+  })
+}
+
+export function processDocumentImage(imageBase64: string): Promise<DocumentImageProcessResponse> {
+  return apiFetch<DocumentImageProcessResponse>('/document/process-image', {
+    method: 'POST',
+    body: JSON.stringify({ image_base64: imageBase64 }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Feature 1: Live Hospital Doctor Availability
+// ---------------------------------------------------------------------------
+
+export interface HospitalAvailabilityUpdatePayload {
+  hospital_id: string
+  hospital_name?: string
+  doctors_available: number
+  emergency_doctors: number
+  nurses_available: number
+  emergency_nurses?: number
+  department_specialists?: Record<string, number>
+  available_beds?: number | null
+  icu_beds_available?: number | null
+  emergency_dept_status?: string // 'Operational' | 'Limited' | 'Critical' | 'Closed'
+  duty_status: string // 'Accepting Patients' | 'Limited' | 'Unavailable'
+  notes?: string
+}
+
+export interface HospitalAvailabilityResponse {
+  hospital_id: string
+  hospital_name: string
+  doctors_available: number
+  emergency_doctors: number
+  nurses_available: number
+  emergency_nurses?: number
+  department_specialists?: Record<string, number>
+  available_beds?: number | null
+  icu_beds_available?: number | null
+  emergency_dept_status?: string
+  duty_status: string
+  last_updated: string
+  updated_by?: string
+  notes?: string
+}
+
+export function updateHospitalAvailability(
+  hospitalId: string,
+  payload: HospitalAvailabilityUpdatePayload
+): Promise<HospitalAvailabilityResponse> {
+  return apiFetch<HospitalAvailabilityResponse>(`/hospitals/${encodeURIComponent(hospitalId)}/availability`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getHospitalAvailability(
+  hospitalId: string
+): Promise<HospitalAvailabilityResponse> {
+  return apiFetch<HospitalAvailabilityResponse>(`/hospitals/${encodeURIComponent(hospitalId)}/availability`)
+}
+
+export function getAllHospitalAvailabilities(): Promise<HospitalAvailabilityResponse[]> {
+  return apiFetch<HospitalAvailabilityResponse[]>('/hospitals-availability/all')
+}
+
+// ---------------------------------------------------------------------------
+// Feature 2: SOS Emergency System
+// ---------------------------------------------------------------------------
+
+export interface EmergencySOSCreatePayload {
+  emergency_type: string
+  hospital_id: string
+  hospital_name?: string
+  patient_name: string
+  patient_phone: string
+  description?: string
+  latitude?: number
+  longitude?: number
+  address?: string
+}
+
+export interface EmergencySOSRecord {
+  sos_id: string
+  emergency_type: string
+  hospital_id: string
+  hospital_name: string
+  patient_name: string
+  patient_phone: string
+  description?: string
+  latitude?: number
+  longitude?: number
+  address?: string
+  status: 'PENDING' | 'ACKNOWLEDGED' | 'RESPONDING' | 'RESOLVED'
+  created_at: string
+  updated_at: string
+  acknowledged_at?: string
+  resolved_at?: string
+  response_notes?: string
+  clinical_protocol?: {
+    emergency_code: string
+    protocol_name: string
+    primary_action: string
+    abcde_protocol?: Array<{ step: string; action: string }>
+    immediate_diagnostics?: string[]
+    stat_medications?: Array<{ name: string; dose: string; indication: string }>
+    critical_precautions?: string[]
+    specialist_consult_needed?: string
+  }
+}
+
+export function createEmergencySOS(
+  payload: EmergencySOSCreatePayload
+): Promise<EmergencySOSRecord> {
+  return apiFetch<EmergencySOSRecord>('/sos', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getEmergencySOS(
+  sosId: string
+): Promise<EmergencySOSRecord> {
+  return apiFetch<EmergencySOSRecord>(`/sos/${encodeURIComponent(sosId)}`)
+}
+
+export function listHospitalSOS(
+  hospitalId: string
+): Promise<EmergencySOSRecord[]> {
+  return apiFetch<EmergencySOSRecord[]>(`/hospitals/${encodeURIComponent(hospitalId)}/sos`)
+}
+
+export function updateSOSStatus(
+  sosId: string,
+  status: 'ACKNOWLEDGED' | 'RESPONDING' | 'RESOLVED',
+  responseNotes?: string
+): Promise<EmergencySOSRecord> {
+  return apiFetch<EmergencySOSRecord>(`/sos/${encodeURIComponent(sosId)}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status,
+      response_notes: responseNotes,
+    }),
+  })
+}
+
+
 
 

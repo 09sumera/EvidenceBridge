@@ -5,6 +5,10 @@ Pytest configuration and shared fixtures for EvidenceBridge tests.
 from datetime import datetime, timezone
 import os
 os.environ["TESTING"] = "1"
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 import sys
 from pathlib import Path
 import pytest

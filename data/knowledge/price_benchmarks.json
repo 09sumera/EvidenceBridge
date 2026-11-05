@@ -191,10 +191,10 @@
     "keywords": ["normal saline", "sodium chloride", "iv bag", "0.9% nacl", "saline solution", "1000 ml", "1000ml"],
     "category": "consumable",
     "typical_min": 35.00,
-    "typical_max": 120.00,
+    "typical_max": 105.00,
     "currency": "INR",
     "unit": "per 1,000 mL IV bag",
-    "source": "NPPA DPCO Essential Drug Ceiling Price Schedule 2026",
+    "source": "NPPA DPCO National Ceiling Price Schedule (S.O. 1499(E) / S.O. 1290(E) non-glass pack: ₹100.87 + 5% GST = ₹105.00)",
     "cpt_code": "J7030"
   },
   {

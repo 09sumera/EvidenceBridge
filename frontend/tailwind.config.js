@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -7,6 +8,24 @@ export default {
   theme: {
     extend: {
       colors: {
+        cream: {
+          50: '#FDFBF7',
+          100: '#FAF8F5', // Adjudo canvas
+          200: '#F4EFE6', // Soft beige surface
+          300: '#EAE2D3', // Muted warm grey/border
+          400: '#D5C7B0',
+          500: '#BDB09B',
+        },
+        adjudo: {
+          orange: '#FF5500',
+          'orange-hover': '#EA4E00',
+          'orange-light': '#FFF0E8',
+          black: '#111111',
+          charcoal: '#18181B',
+          dark: '#0E1015',
+          'dark-surface': '#181B20',
+          'dark-border': '#2A2E37',
+        },
         brand: {
           50:  '#f0f9ff',
           100: '#e0f2fe',
@@ -38,9 +57,14 @@ export default {
         },
       },
       boxShadow: {
-        'subtle': '0 1px 3px 0 rgba(15, 23, 42, 0.05), 0 1px 2px -1px rgba(15, 23, 42, 0.05)',
-        'card': '0 4px 6px -1px rgba(15, 23, 42, 0.04), 0 2px 4px -2px rgba(15, 23, 42, 0.04), 0 0 0 1px rgba(15, 23, 42, 0.05)',
-        'elevated': '0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.03), 0 0 0 1px rgba(15, 23, 42, 0.05)',
+        'adjudo': '2px 2px 0px 0px #111111',
+        'adjudo-sm': '1px 1px 0px 0px #111111',
+        'adjudo-lg': '4px 4px 0px 0px #111111',
+        'adjudo-orange': '2px 2px 0px 0px #FF5500',
+        'subtle': '0 1px 2px 0 rgba(15, 23, 42, 0.04), 0 0 0 1px rgba(15, 23, 42, 0.04)',
+        'card': '0 1px 3px 0 rgba(15, 23, 42, 0.05), 0 1px 2px -1px rgba(15, 23, 42, 0.04), 0 0 0 1px rgba(15, 23, 42, 0.04)',
+        'elevated': '0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 2px 4px -2px rgba(15, 23, 42, 0.03), 0 0 0 1px rgba(15, 23, 42, 0.04)',
+        'panel': '0 10px 25px -5px rgba(15, 23, 42, 0.06), 0 8px 10px -6px rgba(15, 23, 42, 0.03), 0 0 0 1px rgba(15, 23, 42, 0.04)',
       },
     },
   },

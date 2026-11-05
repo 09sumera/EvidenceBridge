@@ -11,6 +11,12 @@ def setup_logger(name: str = "evidencebridge", level: int = logging.INFO) -> log
     logger = logging.getLogger(name)
     if not logger.handlers:
         logger.setLevel(level)
+        # Ensure sys.stdout can safely encode UTF-8 characters (₹, €, etc.) on Windows
+        if hasattr(sys.stdout, "reconfigure"):
+            try:
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(level)
         formatter = logging.Formatter(

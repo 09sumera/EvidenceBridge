@@ -135,6 +135,18 @@ export interface VerificationResult {
   location: LocationInfo | null
   abstain_reason: string | null
   verified_at: string
+  ner_entities?: ExtractedEntity[] | null
+  ner_grouped_info?: GroupedMedicalInformation | null
+  nli_result?: NLIResult | null
+  provider_anomaly?: ProviderAnomalyResult | null
+  claim_anomaly?: ClaimAnomalyResult | null
+  medicine_substitution?: MedicineSubstitutionResult | null
+  requires_human_review?: boolean
+  human_review_reasons?: string[]
+  shared_context?: SharedClaimContext | null
+  synthesis?: CrossModelSynthesis | null
+  billing_reconciliation?: BillingReconciliationResult | null
+  model_6_prediction?: Model6PredictionResult | null
 }
 
 export interface AuditTrail {
@@ -202,6 +214,10 @@ export interface ExtractionRequest {
   source_url?: string | null
   source_timestamp?: string | null
   store_claim?: boolean
+  provider_data?: Record<string, unknown> | null
+  claim_data?: Record<string, unknown> | null
+  target_medicine?: string | null
+  image_base64?: string | null
 }
 
 export interface ExtractionResponse {
@@ -475,6 +491,7 @@ export interface UserResponse {
   email: string
   role: string
   organization?: string
+  hospital_id?: string | null
   created_at: string
 }
 
@@ -495,5 +512,382 @@ export interface UserLoginRequest {
   email: string
   password: string
 }
+
+// ---------------------------------------------------------------------------
+// Five AI Models Integrated Types (Models 1–5, OCR, Preserved Medicine)
+// ---------------------------------------------------------------------------
+
+export interface ExtractedEntity {
+  entity: string
+  text: string
+  start?: number | null
+  end?: number | null
+  confidence: number
+  requires_human_review: boolean
+}
+
+export interface GroupedField {
+  value: string
+  confidence: number
+  requires_human_review: boolean
+  raw_entity?: string | null
+  source_snippet?: string | null
+}
+
+export interface HospitalGroup {
+  hospital_name?: GroupedField | null
+  location?: GroupedField | null
+  phone?: GroupedField | null
+  patient_name?: GroupedField | null
+  age_gender?: GroupedField | null
+  patient_id?: GroupedField | null
+  claim_reference?: GroupedField | null
+  insurer?: GroupedField | null
+  tpa?: GroupedField | null
+  policy_number?: GroupedField | null
+  preauth_number?: GroupedField | null
+}
+
+export interface MedicineGroup {
+  medicine_name?: GroupedField | null
+  brand_name?: GroupedField | null
+  generic_name?: GroupedField | null
+  active_ingredient?: GroupedField | null
+  strength?: GroupedField | null
+  dosage_quantity?: GroupedField | null
+  route?: GroupedField | null
+  frequency?: GroupedField | null
+  duration?: GroupedField | null
+  instructions?: GroupedField | null
+}
+
+export interface ClinicalGroup {
+  encounter_type?: GroupedField | null
+  length_of_stay?: GroupedField | null
+  procedure?: GroupedField | null
+  diagnosis?: GroupedField | null
+  clinical_indication?: GroupedField | null
+  admission_date?: GroupedField | null
+  discharge_date?: GroupedField | null
+  room_type?: GroupedField | null
+  findings?: GroupedField | null
+}
+
+export interface BillingGroup {
+  billed_amount?: GroupedField | null
+  currency?: string | null
+  invoice_number?: GroupedField | null
+  gstin?: GroupedField | null
+  hsn_sac?: GroupedField | null
+  tax_amount?: GroupedField | null
+  discount?: GroupedField | null
+  patient_payable?: GroupedField | null
+  unit_price?: GroupedField | null
+  line_amount?: GroupedField | null
+  subtotal?: GroupedField | null
+  claimed_amount?: GroupedField | null
+  approved_amount?: GroupedField | null
+  insurance_deduction?: GroupedField | null
+}
+
+export interface GroupedMedicalInformation {
+  hospital: HospitalGroup
+  medicine: MedicineGroup
+  clinical: ClinicalGroup
+  billing: BillingGroup
+  document_type?: string | null
+}
+
+export interface NERExtractionResult {
+  model_name: string
+  entities: ExtractedEntity[]
+  total_entities: number
+  document_type_detected?: string | null
+  execution_time_ms?: number | null
+  grouped_info?: GroupedMedicalInformation | null
+}
+
+export interface RetrievalResultPassage {
+  passage_id: string
+  guideline_id?: string | null
+  title: string
+  source: string
+  text: string
+  similarity_score: number
+  model_name: string
+}
+
+export interface NLIResult {
+  model_name: string
+  decision: string // 'entailment' | 'contradiction' | 'neutral' | 'review_required'
+  predicted_class: string
+  confidence: number
+  requires_human_review: boolean
+  probabilities: Record<string, number>
+  threshold_applied: number
+  notes?: string | null
+}
+
+export interface ProviderAnomalyResult {
+  model_version: string
+  decision?: string
+  is_anomaly: boolean
+  anomaly_score: number
+  screening_flag: string
+  features_used: Record<string, unknown>
+  explanations: string[]
+  has_sufficient_data: boolean
+  disclaimer: string
+}
+
+export interface ClaimAnomalyResult {
+  model_version: string
+  decision?: string
+  is_anomaly: boolean
+  anomaly_score: number
+  screening_flag: string
+  model_agreement?: string | null
+  v3_score?: number | null
+  v4a_score?: number | null
+  features_used: Record<string, unknown>
+  explanations: string[]
+  has_sufficient_data: boolean
+  disclaimer: string
+}
+
+export interface MedicineSubstitutionResult {
+  query_medicine: string
+  target_medicine: string
+  match_probability: number
+  is_match: boolean
+  explanation: string
+}
+
+export interface SharedClaimContext {
+  claim_id: string
+  document_id: string
+  source_type: string
+  source_url?: string | null
+  original_text: string
+  ocr_text?: string | null
+  hospital_name?: string | null
+  provider_name?: string | null
+  patient_info?: Record<string, unknown> | null
+  diagnoses: string[]
+  medicines: string[]
+  procedures: string[]
+  billed_amount?: number | null
+  currency: string
+  clinical_statement: string
+  retrieved_passages_count: number
+  provider_data_available: boolean
+  claim_data_available: boolean
+  detected_issue_types: string[]
+}
+
+export interface CrossModelSynthesis {
+  claim_id: string
+  primary_entity: string
+  detected_issues: string[]
+  primary_trigger_issue?: string | null
+  clinical_agreement_summary: string
+  financial_agreement_summary: string
+  provider_agreement_summary: string
+  missing_information: string[]
+  human_review_required: boolean
+  human_review_rationale?: string | null
+  synthesis_markdown: string
+}
+
+export type BillingClassification =
+  | 'TOTAL_MATCH'
+  | 'TOTAL_MISMATCH'
+  | 'POSSIBLE_DUPLICATE'
+  | 'POTENTIAL_OVERLAP_REQUIRES_REVIEW'
+  | 'INSUFFICIENT_ITEMIZATION'
+
+export interface BillingLineItem {
+  item_id: string
+  description: string
+  amount: number
+  currency?: string
+  category?: string | null
+  raw_text?: string | null
+}
+
+export interface DuplicateLineItem {
+  description: string
+  occurrences: number
+  amount_per_occurrence: number
+  total_duplicate_billed: number
+  currency?: string
+  clinical_note: string
+}
+
+export interface OverlappingCharge {
+  item_a: string
+  item_b: string
+  overlap_type: string
+  potential_overlap_amount: number
+  currency?: string
+  policy_reference: string
+  explanation: string
+}
+
+export interface BenchmarkComparison {
+  service_or_item: string
+  billed_amount: number
+  benchmark_min?: number | null
+  benchmark_max?: number | null
+  currency?: string
+  status: 'WITHIN_BENCHMARK' | 'EXCEEDS_BENCHMARK' | 'BELOW_BENCHMARK' | 'CANNOT_ESTABLISH'
+  difference_amount?: number | null
+  percentage_difference?: number | null
+  source_attribution?: string | null
+  location_tier?: string | null
+  service_category?: string | null
+  ceiling_conditions?: string | null
+  note: string
+}
+
+export interface BillingReconciliationResult {
+  classification: BillingClassification
+  stated_total?: number | null
+  itemized_sum: number
+  difference?: number | null
+  currency?: string
+  line_items: BillingLineItem[]
+  duplicates: DuplicateLineItem[]
+  overlaps: OverlappingCharge[]
+  benchmark_comparisons: BenchmarkComparison[]
+  summary_message: string
+  explanations: string[]
+  auditor_notes: string[]
+  disclaimer: string
+}
+
+export interface UnifiedAuditReport {
+  claim_id: string
+  original_text: string
+  ner_result?: NERExtractionResult | null
+  retrieval_passages: RetrievalResultPassage[]
+  nli_result?: NLIResult | null
+  provider_anomaly?: ProviderAnomalyResult | null
+  claim_anomaly?: ClaimAnomalyResult | null
+  cost_anomaly?: CostAnomalyDetails | null
+  medicine_substitution?: MedicineSubstitutionResult | null
+  billing_reconciliation?: BillingReconciliationResult | null
+  model_6_prediction?: Model6PredictionResult | null
+  shared_context?: SharedClaimContext | null
+  synthesis?: CrossModelSynthesis | null
+  overall_verdict: VerificationVerdict
+  overall_action: VerificationAction
+  requires_human_review: boolean
+  human_review_reasons: string[]
+  summary_markdown: string
+  audit_trail_id?: string | null
+}
+
+export interface Model6PredictionResult {
+  document_category: string
+  category_label: string
+  model_score: number
+  all_probabilities?: Record<string, number>
+  is_supported: boolean
+  suggested_source_type: SourceType
+  model_name: string
+  message?: string | null
+  processed_at?: string
+}
+
+export interface DocumentImageProcessResponse {
+  model6_prediction: Model6PredictionResult
+  ocr_text: string
+  ocr_confidence: number
+  ocr_lines_count: number
+  suggested_source_type: SourceType
+  is_clear: boolean
+  notice?: string | null
+}
+
+export interface ModelStatusResponse {
+  status: string
+  device: {
+    configured: string
+    cuda_available: boolean
+    device_name: string
+  }
+  models: {
+    model_1_ner: {
+      name: string
+      path: string
+      available: boolean
+      labels_count: number
+    }
+    model_2_retrieval: {
+      name: string
+      path: string
+      finetuned_path?: string
+      available: boolean
+      dimensions: number
+      default: string
+    }
+    model_3_nli: {
+      name: string
+      path: string
+      available: boolean
+      classes: string[]
+      provisional_threshold: number
+    }
+    model_4_provider_anomaly: {
+      name: string
+      path: string
+      v1_path?: string
+      v2_path?: string
+      available: boolean
+      features_count: number
+      label: string
+    }
+    model_5_claim_anomaly: {
+      name: string
+      path: string
+      v4a_path?: string
+      available: boolean
+      features_count: number
+      label: string
+    }
+    medicine_matcher: {
+      name: string
+      path: string
+      available: boolean
+      purpose: string
+    }
+    ocr_engine: {
+      name: string
+      available: boolean
+      purpose: string
+    }
+    model_6_document_ai?: {
+      name: string
+      path: string
+      available: boolean
+      classes: string[]
+      threshold: number
+      purpose: string
+    }
+  }
+}
+
+export interface UnifiedAuditRequest {
+  text?: string
+  image_base64?: string
+  source_type?: string
+  source_url?: string
+  provider_data?: Record<string, unknown>
+  claim_data?: Record<string, unknown>
+  target_medicine?: string
+  store_claim?: boolean
+}
+
 
 

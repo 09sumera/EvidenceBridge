@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { extractAndVerify, ensureAuthToken } from '../api/client'
-import type { ExtractAndVerifyResponse, SourceType } from '../types'
+import { extractAndVerify, ensureAuthToken, processDocumentImage } from '../api/client'
+import type { ExtractAndVerifyResponse, SourceType, Model6PredictionResult } from '../types'
 import { VerificationBadge, VerdictBadge } from './VerificationBadge'
 import { useVoice } from '../context/VoiceContext'
 import { useAudit } from '../context/AuditContext'
+import { useAuth } from '../context/AuthContext'
+import { useTheme } from '../context/ThemeContext'
+import { saveUserClaim } from '../services/userDataStore'
 import { formatCurrency } from '../utils/currency'
 import { extractTextFromImage } from '../utils/ocr'
 import CameraCaptureModal from './CameraCaptureModal'
 import PostProcessingSummary from './PostProcessingSummary'
+import FiveModelsAuditPanel from './FiveModelsAuditPanel'
 
 interface ExtractVerifyFormProps {
   initialText?: string
@@ -19,6 +23,8 @@ export function ExtractVerifyForm({
   initialText = '',
   onSampleCleared,
 }: ExtractVerifyFormProps) {
+  const { user } = useAuth()
+  const { isDark } = useTheme()
   const { setActiveClaim, readClaimAloud } = useVoice()
   const {
     result,
@@ -39,7 +45,13 @@ export function ExtractVerifyForm({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // OCR and Image Upload / Camera states
+  // Optional 5-model anomaly screening inputs
+  const [showAnomalyOptions, setShowAnomalyOptions] = useState(false)
+  const [attachSampleAnomalyData, setAttachSampleAnomalyData] = useState(false)
+  const [anomalyPreset, setAnomalyPreset] = useState<'none' | 'normal_sharma' | 'shree_audit'>('none')
+
+  // Model 6 Document AI and OCR states
+  const [model6Prediction, setModel6Prediction] = useState<Model6PredictionResult | null>(null)
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrProgress, setOcrProgress] = useState(0)
   const [ocrStatusText, setOcrStatusText] = useState('')
@@ -85,6 +97,17 @@ export function ExtractVerifyForm({
     }
   }, [])
 
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        resolve(reader.result as string)
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  }
+
   const runOcrOnSource = async (source: File | Blob, displayName: string) => {
     // Revoke previous object URL if any
     if (previousObjectUrlRef.current && previousObjectUrlRef.current.startsWith('blob:')) {
@@ -97,37 +120,96 @@ export function ExtractVerifyForm({
     setImagePreview(previewUrl)
     setImageName(displayName)
     setOcrLoading(true)
-    setOcrProgress(5)
-    setOcrStatusText('Initializing OCR...')
+    setOcrProgress(15)
+    setOcrStatusText('Model 6 Document AI analyzing image...')
     setOcrWarning(null)
     setOcrSuccessMessage(null)
+    setModel6Prediction(null)
 
     try {
-      const res = await extractTextFromImage(source, (pct, status) => {
-        setOcrProgress(pct)
-        setOcrStatusText(status)
-      })
+      // 1. Convert image to Base64
+      const base64Data = await blobToBase64(source)
 
-      if (res.text) {
-        setText(res.text)
-        if (res.isLowQuality && res.warningMessage) {
-          setOcrWarning(res.warningMessage)
-        } else {
-          setOcrSuccessMessage('Text successfully extracted from document. Please review before verifying.')
+      // 2. Call backend unified image processing (Model 6 + RapidOCR)
+      setOcrProgress(35)
+      setOcrStatusText('Running Model 6 Document AI & OCR...')
+
+      let processedBackend = false
+      try {
+        const procRes = await processDocumentImage(base64Data)
+        if (procRes && procRes.model6_prediction) {
+          processedBackend = true
+          setModel6Prediction(procRes.model6_prediction)
+          setOcrProgress(80)
+
+          // Automatically sync suggested source type if recognized
+          if (procRes.suggested_source_type) {
+            setSourceType(procRes.suggested_source_type)
+          }
+
+          if (procRes.ocr_text && procRes.ocr_text.trim()) {
+            setText(procRes.ocr_text)
+            setOcrProgress(100)
+            if (procRes.notice) {
+              setOcrWarning(procRes.notice)
+            } else {
+              setOcrSuccessMessage(
+                `Classified as ${procRes.model6_prediction.category_label} (${(procRes.model6_prediction.model_score * 100).toFixed(1)}% confidence). Verbatim text extracted below.`
+              )
+            }
+          } else {
+            // Backend OCR yielded minimal text; fallback to client OCR for text extraction
+            setOcrStatusText('Extracting text via client-side OCR...')
+            const clientOcr = await extractTextFromImage(source, (pct, status) => {
+              setOcrProgress(pct)
+              setOcrStatusText(status)
+            })
+            if (clientOcr.text) {
+              setText(clientOcr.text)
+              setOcrSuccessMessage(
+                `Classified as ${procRes.model6_prediction.category_label}. Text extracted. Please review before verifying.`
+              )
+            } else {
+              setOcrWarning(
+                'Document type identified, but text could not be read clearly. Please type or edit the details below.'
+              )
+            }
+          }
         }
-      } else {
-        setOcrWarning(
-          res.warningMessage ||
-            'Some parts of the image could not be read clearly. Please check the text below or type the missing information.'
-        )
+      } catch (backendErr) {
+        console.warn('Backend processDocumentImage failed; falling back to client OCR:', backendErr)
+      }
+
+      // 3. Fallback to client-side OCR if backend was unreachable
+      if (!processedBackend) {
+        setOcrStatusText('Running client-side OCR...')
+        const res = await extractTextFromImage(source, (pct, status) => {
+          setOcrProgress(pct)
+          setOcrStatusText(status)
+        })
+
+        if (res.text) {
+          setText(res.text)
+          if (res.isLowQuality && res.warningMessage) {
+            setOcrWarning(res.warningMessage)
+          } else {
+            setOcrSuccessMessage('Text successfully extracted from document. Please review before verifying.')
+          }
+        } else {
+          setOcrWarning(
+            res.warningMessage ||
+              'Some parts of the image could not be read clearly. Please check the text below or type the missing information.'
+          )
+        }
       }
     } catch (err: unknown) {
-      console.error('OCR error:', err)
+      console.error('Image processing error:', err)
       setOcrWarning(
         'Some parts of the image could not be read clearly. Please check the text below or type the missing information.'
       )
     } finally {
       setOcrLoading(false)
+      setOcrProgress(100)
     }
   }
 
@@ -151,6 +233,7 @@ export function ExtractVerifyForm({
     }
     setImagePreview(null)
     setImageName(null)
+    setModel6Prediction(null)
     setOcrWarning(null)
     setOcrSuccessMessage(null)
   }
@@ -161,18 +244,135 @@ export function ExtractVerifyForm({
 
     setLoading(true)
     setError(null)
+    // Clear stale previous audit results immediately upon new submission
+    setResult(null)
+    setActiveClaim(null)
+
+    let sampleProviderData: Record<string, any> | undefined = undefined
+    let sampleClaimData: Record<string, any> | undefined = undefined
 
     try {
       await ensureAuthToken()
+
+      const effectivePreset = anomalyPreset !== 'none' 
+        ? anomalyPreset 
+        : (attachSampleAnomalyData ? 'normal_sharma' : 'none')
+
+      if (effectivePreset === 'shree_audit') {
+        sampleProviderData = {
+          provider_name: 'Shree Medical Institute',
+          Tot_Benes: 2100,
+          Tot_Srvcs: 8400,
+          Tot_Bene_Day_Srvcs: 6300,
+          Avg_Sbmtd_Chrg: 12500.0,
+          Avg_Mdcr_Alowd_Amt: 9800.0,
+          Submitted_To_Allowed_Ratio: 1.28,
+          Services_Per_Beneficiary: 4.0,
+          Bene_Days_Per_Beneficiary: 3.0,
+          Medicare_Payment_Ratio: 0.78,
+        }
+        sampleClaimData = {
+          CLM_ID: 'CLM_SHREE_7721',
+          DESYNPUF_ID: 'BENE_000772',
+          PRVDR_NUM: 'shree_medical',
+          CLM_ADMSN_DT: '20260210',
+          CLM_FROM_DT: '20260210',
+          CLM_THRU_DT: '20260214',
+          NCH_BENE_DSCHRG_DT: '20260214',
+          CLM_UTLZTN_DAY_CNT: 4,
+          CLM_PASS_THRU_PER_DIEM_AMT: 0.0, // Calibrated: pass-through per diem is 0.0, not total charge
+          NCH_BENE_PTA_COINSRNC_LBLTY_AM: 0.0,
+          NCH_BENE_BLOOD_DDCTBL_LBLTY_AM: 0.0,
+          CLM_DRG_CD: '194',
+          diagnosis_codes: ['486'],
+          procedure_codes: ['3893'],
+        }
+      } else if (effectivePreset === 'normal_sharma') {
+        sampleProviderData = {
+          provider_name: 'Dr. Arun Sharma',
+          Rndrng_NPI: '1003000126',
+          Rndrng_Prvdr_Last_Org_Name: 'Sharma',
+          Rndrng_Prvdr_First_Name: 'Arun',
+          Rndrng_Prvdr_Type: 'Cardiology',
+          Tot_Benes: 450,
+          Tot_Srvcs: 1820,
+          Tot_Bene_Day_Srvcs: 1440,
+          Avg_Sbmtd_Chrg: 485.50,
+          Avg_Mdcr_Alowd_Amt: 145.20,
+          Avg_Mdcr_Pymt_Amt: 112.80,
+          Avg_Mdcr_Stdzd_Amt: 110.40,
+          Submitted_To_Allowed_Ratio: 3.34,
+          Allowed_To_Payment_Ratio: 1.29,
+          Services_Per_Beneficiary: 4.04,
+          Bene_Days_Per_Beneficiary: 3.20,
+          Medicare_Payment_Ratio: 0.78,
+        }
+        sampleClaimData = {
+          CLM_ID: 'CLM_DEMO_99812',
+          DESYNPUF_ID: 'BENE_000982',
+          PRVDR_NUM: '10001',
+          CLM_ADMSN_DT: '20260210',
+          CLM_FROM_DT: '20260210',
+          CLM_THRU_DT: '20260214',
+          NCH_BENE_DSCHRG_DT: '20260214',
+          CLM_UTLZTN_DAY_CNT: 4,
+          CLM_PASS_THRU_PER_DIEM_AMT: 0.0, // Calibrated: pass-through per diem is 0.0, not total charge
+          NCH_BENE_PTA_COINSRNC_LBLTY_AM: 0.0,
+          NCH_BENE_BLOOD_DDCTBL_LBLTY_AM: 0.0,
+          CLM_DRG_CD: '194',
+          diagnosis_codes: ['486', '4280'],
+          procedure_codes: ['9671', '3893'],
+        }
+      }
+
       const response = await extractAndVerify({
         text: text.trim(),
         source_type: sourceType,
         source_url: sourceUrl.trim() || undefined,
         store_claim: true,
+        provider_data: sampleProviderData,
+        claim_data: sampleClaimData,
       })
       setResult(response)
+
+      // Save claim into the active user's isolated data vault
+      if (user?.email && response?.claim) {
+        saveUserClaim(
+          user.email,
+          response.claim,
+          response.verification,
+          null,
+        )
+      }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Claim auditing failed.')
+      const errMsg = err instanceof Error ? err.message : 'Claim auditing failed.'
+      // Resilient self-healing retry if an old or expired token was present in localStorage
+      if (
+        errMsg.toLowerCase().includes('token') ||
+        errMsg.toLowerCase().includes('session') ||
+        errMsg.includes('401')
+      ) {
+        try {
+          await ensureAuthToken(true)
+          const retryRes = await extractAndVerify({
+            text: text.trim(),
+            source_type: sourceType,
+            source_url: sourceUrl.trim() || undefined,
+            store_claim: true,
+            provider_data: sampleProviderData,
+            claim_data: sampleClaimData,
+          })
+          setResult(retryRes)
+          if (user?.email && retryRes?.claim) {
+            saveUserClaim(user.email, retryRes.claim, retryRes.verification, null)
+          }
+          return
+        } catch {
+          // Fall through to display error
+        }
+      }
+      setError(errMsg)
+      setResult(null)
     } finally {
       setLoading(false)
     }
@@ -197,16 +397,22 @@ export function ExtractVerifyForm({
     <div className="space-y-6">
       {/* Active Audit State Indicator Banner */}
       {result && (
-        <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-50 via-teal-50/50 to-white border border-sky-200/80 shadow-subtle flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-800">
+        <div className={`p-4 rounded-2xl border shadow-adjudo flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-all ${
+          isDark
+            ? 'bg-adjudo-dark-surface border-neutral-700 text-neutral-200'
+            : 'bg-white border-neutral-900 text-neutral-900'
+        }`}>
           <div className="flex items-center gap-2.5">
-            <span className="w-8 h-8 rounded-xl bg-sky-100 text-sky-800 font-bold flex items-center justify-center flex-shrink-0 text-base">
+            <span className={`w-8 h-8 rounded-xl font-bold flex items-center justify-center flex-shrink-0 text-base border ${
+              isDark ? 'bg-neutral-900 text-orange-400 border-neutral-700' : 'bg-cream-200 text-neutral-950 border-neutral-900'
+            }`}>
               📌
             </span>
             <div>
-              <strong className="text-slate-900 block font-bold">
+              <strong className={`block font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>
                 Audited Document Retained &amp; Active
               </strong>
-              <span className="text-slate-600">
+              <span className={isDark ? 'text-neutral-400' : 'text-neutral-600'}>
                 Displaying audit evaluation for <strong>{result.claim.extracted_fields?.entity || result.claim.claim_id}</strong>. This result stays preserved as you browse other tabs until you sign out or start a new audit.
               </span>
             </div>
@@ -214,7 +420,11 @@ export function ExtractVerifyForm({
           <button
             type="button"
             onClick={handleClear}
-            className="px-4 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-xs whitespace-nowrap self-start sm:self-auto transition-colors shadow-2xs inline-flex items-center gap-1.5"
+            className={`px-4 py-2 rounded-xl font-bold text-xs whitespace-nowrap self-start sm:self-auto transition-all shadow-adjudo-sm inline-flex items-center gap-1.5 border cursor-pointer ${
+              isDark
+                ? 'bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border-neutral-700'
+                : 'bg-white hover:bg-cream-200 text-neutral-900 border-neutral-900'
+            }`}
           >
             <span>🔄</span>
             <span>Start New Audit</span>
@@ -225,27 +435,33 @@ export function ExtractVerifyForm({
       {/* Input Form Card */}
       <form
         onSubmit={handleSubmit}
-        className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-card"
+        className={`rounded-2xl border p-6 sm:p-8 shadow-adjudo transition-all ${
+          isDark ? 'bg-adjudo-dark-surface border-neutral-700' : 'bg-white border-neutral-900'
+        }`}
       >
         <div className="flex items-center justify-between mb-2">
           <div>
-            <span className="text-xs font-bold text-sky-700 bg-sky-50 border border-sky-200 px-2.5 py-1 rounded-full uppercase tracking-wider">
+            <span className={`text-xs font-black px-2.5 py-1 rounded-full uppercase tracking-wider border ${
+              isDark
+                ? 'text-orange-300 bg-orange-950/70 border-orange-800'
+                : 'text-orange-950 bg-orange-100 border-orange-600'
+            }`}>
               Step 1
             </span>
             <label
               htmlFor="clinical-text"
-              className="block text-base font-bold text-slate-900 mt-1.5"
+              className={`block text-base font-black mt-2 ${isDark ? 'text-white' : 'text-neutral-950'}`}
             >
               Raw Hospital Bill or Clinical Chart Note
             </label>
           </div>
-          <span className="text-xs text-slate-400">
+          <span className={`text-xs font-bold ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
             {text.length > 0 ? `${text.length} characters` : 'Paste unedited document'}
           </span>
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 mb-3.5">
-          <p className="text-sm text-slate-500 leading-relaxed">
+          <p className={`text-sm leading-relaxed ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
             Paste an itemized hospital bill line (e.g. CPT procedure code, billed dollars), an EHR consultation note, or a prescription summary.
           </p>
 
@@ -255,10 +471,14 @@ export function ExtractVerifyForm({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={ocrLoading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 text-xs font-bold transition-all shadow-xs disabled:opacity-50"
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all shadow-adjudo-sm cursor-pointer disabled:opacity-50 ${
+                isDark
+                  ? 'border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800'
+                  : 'border-neutral-900 bg-white text-neutral-900 hover:bg-cream-200'
+              }`}
               title="Upload an image of a hospital bill or prescription"
             >
-              <svg className="w-4 h-4 text-sky-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-4 h-4 ${isDark ? 'text-orange-400' : 'text-orange-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
               </svg>
               Upload Photo
@@ -268,10 +488,14 @@ export function ExtractVerifyForm({
               type="button"
               onClick={() => setIsCameraModalOpen(true)}
               disabled={ocrLoading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-indigo-300 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 text-xs font-bold transition-all shadow-xs disabled:opacity-50"
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all shadow-adjudo-sm cursor-pointer disabled:opacity-50 ${
+                isDark
+                  ? 'border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800'
+                  : 'border-neutral-900 bg-white text-neutral-900 hover:bg-cream-200'
+              }`}
               title="Take a photo with your device camera"
             >
-              <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-4 h-4 ${isDark ? 'text-orange-400' : 'text-orange-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
@@ -331,6 +555,72 @@ export function ExtractVerifyForm({
           </div>
         )}
 
+        {/* Model 6 Image-Based Medical Document AI Result Card */}
+        {model6Prediction && (
+          <div className="mb-3.5 p-3.5 bg-gradient-to-r from-indigo-50/90 via-sky-50/40 to-slate-50 border border-indigo-200/90 rounded-xl shadow-xs animate-fadeIn">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider bg-indigo-600 text-white rounded-md shadow-xs">
+                  Model 6
+                </span>
+                <span className="text-xs font-bold text-slate-800">
+                  Medical Document AI:
+                </span>
+                <span className="text-xs font-extrabold text-indigo-950 bg-indigo-100/80 border border-indigo-200 px-2 py-0.5 rounded-md">
+                  {model6Prediction.category_label}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                    model6Prediction.is_supported && model6Prediction.model_score >= 0.85
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                      : model6Prediction.is_supported
+                      ? 'bg-sky-50 text-sky-800 border-sky-300'
+                      : 'bg-amber-50 text-amber-800 border-amber-300'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
+                  {(model6Prediction.model_score * 100).toFixed(1)}% Confidence
+                </span>
+              </div>
+            </div>
+
+            {/* Class Probabilities Distribution */}
+            {model6Prediction.all_probabilities && (
+              <div className="mt-2.5 pt-2 border-t border-indigo-100 flex items-center justify-between text-[11px] text-slate-600 flex-wrap gap-2">
+                <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                  <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                    Distribution:
+                  </span>
+                  <span className={model6Prediction.document_category === 'invoice_or_receipt' ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
+                    Invoice/Bill: {((model6Prediction.all_probabilities['invoice_or_receipt'] ?? 0) * 100).toFixed(1)}%
+                  </span>
+                  <span className="text-slate-300">•</span>
+                  <span className={model6Prediction.document_category === 'prescription' ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
+                    Prescription: {((model6Prediction.all_probabilities['prescription'] ?? 0) * 100).toFixed(1)}%
+                  </span>
+                  <span className="text-slate-300">•</span>
+                  <span className={model6Prediction.document_category === 'laboratory_report' ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
+                    Lab Report: {((model6Prediction.all_probabilities['laboratory_report'] ?? 0) * 100).toFixed(1)}%
+                  </span>
+                </div>
+
+                <div className="text-[10px] text-indigo-700 font-semibold bg-indigo-50/80 px-2 py-0.5 rounded-md border border-indigo-100">
+                  Target Audit Scope: <span className="font-bold underline capitalize">{model6Prediction.suggested_source_type.replace('_', ' ')}</span>
+                </div>
+              </div>
+            )}
+
+            {model6Prediction.message && (
+              <p className="mt-1.5 text-[11px] text-slate-600 italic">
+                {model6Prediction.message}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* OCR Unclear Text Warning */}
         {ocrWarning && (
           <div className="mb-3.5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5 shadow-subtle animate-fadeIn">
@@ -365,7 +655,11 @@ export function ExtractVerifyForm({
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={ocrLoading ? 'Extracting text from image using OCR... please wait.' : 'e.g. EMERGENCY ROOM - HOUSTON, TX. Patient with focal neurological signs underwent CPT 70551 MRI Brain without contrast. Billed charge $650.00...'}
-          className="w-full px-4 py-3.5 rounded-xl border border-slate-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 text-slate-800 placeholder:text-slate-400 bg-slate-50/40 leading-relaxed"
+          className={`w-full px-4 py-3.5 rounded-xl border text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 leading-relaxed transition-all shadow-inner ${
+            isDark
+              ? 'border-neutral-700 bg-neutral-900 text-neutral-100 placeholder:text-neutral-500'
+              : 'border-neutral-900 bg-cream-50/70 text-neutral-950 placeholder:text-neutral-500'
+          }`}
           required
         />
 
@@ -374,7 +668,7 @@ export function ExtractVerifyForm({
           <div>
             <label
               htmlFor="source-type"
-              className="block text-xs sm:text-sm font-semibold text-slate-700 mb-1.5"
+              className={`block text-xs sm:text-sm font-black mb-1.5 ${isDark ? 'text-neutral-200' : 'text-neutral-950'}`}
             >
               Document Classification
             </label>
@@ -382,7 +676,11 @@ export function ExtractVerifyForm({
               id="source-type"
               value={sourceType}
               onChange={(e) => setSourceType(e.target.value as SourceType)}
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 bg-white"
+              className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all ${
+                isDark
+                  ? 'border-neutral-700 bg-neutral-900 text-neutral-100'
+                  : 'border-neutral-900 bg-white text-neutral-950'
+              }`}
             >
               <option value="hospital_bill">Hospital Bill / Itemized Statement</option>
               <option value="clinical_note">Clinical Chart Note / EHR</option>
@@ -395,7 +693,7 @@ export function ExtractVerifyForm({
           <div>
             <label
               htmlFor="source-url"
-              className="block text-xs sm:text-sm font-semibold text-slate-700 mb-1.5"
+              className={`block text-xs sm:text-sm font-black mb-1.5 ${isDark ? 'text-neutral-200' : 'text-neutral-950'}`}
             >
               Document Origin or Reference ID (Optional)
             </label>
@@ -405,17 +703,114 @@ export function ExtractVerifyForm({
               value={sourceUrl}
               onChange={(e) => setSourceUrl(e.target.value)}
               placeholder="e.g. ehr://houston-methodist/pt-89321"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500 placeholder:text-slate-400"
+              className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all ${
+                isDark
+                  ? 'border-neutral-700 bg-neutral-900 text-neutral-100 placeholder:text-neutral-500'
+                  : 'border-neutral-900 bg-white text-neutral-950 placeholder:text-neutral-400'
+              }`}
             />
           </div>
         </div>
 
+        {/* Optional 5-Model Screening Helper */}
+        <div className="mt-4 pt-3 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => setShowAnomalyOptions(!showAnomalyOptions)}
+            className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
+          >
+            <span>{showAnomalyOptions ? '▼' : '▶'}</span>
+            <span>Attach Provider &amp; Inpatient Metrics for Models 4 &amp; 5 (Optional)</span>
+          </button>
+
+          {showAnomalyOptions && (
+            <div className="mt-2.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-3 animate-fadeIn">
+              <div className="font-semibold text-slate-800">
+                Simulated Provider &amp; Inpatient Test Benchmarks (Model 4 &amp; Model 5)
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                By default, Models 4 &amp; 5 evaluate genuine claim text, historical storage records, or safely abstain when data is absent. You may select a verified audit test preset:
+              </p>
+
+              <div className="space-y-2">
+                <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white transition-colors border border-transparent hover:border-slate-200">
+                  <input
+                    type="radio"
+                    name="anomalyPreset"
+                    value="none"
+                    checked={anomalyPreset === 'none' && !attachSampleAnomalyData}
+                    onChange={() => {
+                      setAnomalyPreset('none')
+                      setAttachSampleAnomalyData(false)
+                    }}
+                    className="mt-0.5 text-sky-600 focus:ring-sky-500"
+                  />
+                  <div>
+                    <strong className="block font-medium text-slate-900">
+                      Standard Evaluation (Auto-Extract or Storage Query)
+                    </strong>
+                    <span className="text-[11px] text-slate-500 block leading-tight">
+                      Model 4 queries genuine database claims for the provider or extracted dossier; Model 5 derives inpatient metrics from text or defers outpatient visits.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white transition-colors border border-transparent hover:border-slate-200">
+                  <input
+                    type="radio"
+                    name="anomalyPreset"
+                    value="normal_sharma"
+                    checked={anomalyPreset === 'normal_sharma' || (attachSampleAnomalyData && anomalyPreset !== 'shree_audit')}
+                    onChange={() => {
+                      setAnomalyPreset('normal_sharma')
+                      setAttachSampleAnomalyData(true)
+                    }}
+                    className="mt-0.5 text-sky-600 focus:ring-sky-500"
+                  />
+                  <div>
+                    <strong className="block font-medium text-slate-900">
+                      Dr. Arun Sharma — Normal Provider &amp; 4-Day Normal Inpatient Stay
+                    </strong>
+                    <span className="text-[11px] text-slate-500 block leading-tight">
+                      Evaluates Model 4 with normal practice distributions and Model 5 with a standard 4-day inpatient stay (yielding NORMAL / NOT FLAGGED).
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white transition-colors border border-transparent hover:border-slate-200">
+                  <input
+                    type="radio"
+                    name="anomalyPreset"
+                    value="shree_audit"
+                    checked={anomalyPreset === 'shree_audit'}
+                    onChange={() => {
+                      setAnomalyPreset('shree_audit')
+                      setAttachSampleAnomalyData(true)
+                    }}
+                    className="mt-0.5 text-sky-600 focus:ring-sky-500"
+                  />
+                  <div>
+                    <strong className="block font-medium text-slate-900">
+                      Shree Medical Institute — Inpatient Audit Reproduction Case
+                    </strong>
+                    <span className="text-[11px] text-slate-500 block leading-tight">
+                      Evaluates Model 4 with Shree Medical Institute 2,100-beneficiary volume (ANOMALOUS / Review recommended) and Model 5 with calibrated inpatient metrics.
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Actions Row */}
-        <div className="flex items-center justify-between pt-6 mt-6 border-t border-slate-100">
+        <div className={`flex items-center justify-between pt-6 mt-6 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
           <button
             type="button"
             onClick={handleClear}
-            className="text-sm text-slate-500 hover:text-slate-800 font-medium px-4 py-2.5 rounded-xl hover:bg-slate-100 transition-colors"
+            className={`text-sm font-bold px-4 py-2.5 rounded-xl border transition-all cursor-pointer ${
+              isDark ? 'border-neutral-700 text-neutral-300 hover:text-white hover:bg-neutral-800' : 'border-neutral-900/60 text-neutral-800 hover:text-black hover:bg-cream-200'
+            }`}
           >
             Clear Text
           </button>
@@ -423,7 +818,7 @@ export function ExtractVerifyForm({
           <button
             type="submit"
             disabled={loading || ocrLoading || !text.trim()}
-            className="inline-flex items-center gap-2 px-7 py-3 rounded-xl bg-sky-600 text-white text-sm sm:text-base font-bold hover:bg-sky-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+            className="adjudo-btn-primary inline-flex items-center gap-2 px-8 py-3.5 rounded-xl text-sm sm:text-base font-black disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
             {loading ? (
               <>
@@ -449,7 +844,7 @@ export function ExtractVerifyForm({
                 Auditing Clinical Evidence &amp; Pricing...
               </>
             ) : (
-              'Extract & Verify Claim'
+              'Extract & Verify Claim →'
             )}
           </button>
         </div>
@@ -457,7 +852,9 @@ export function ExtractVerifyForm({
 
       {/* Error Message */}
       {error && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm flex items-start gap-3 shadow-subtle">
+        <div className={`p-4 rounded-xl border text-xs sm:text-sm flex items-start gap-3 shadow-subtle ${
+          isDark ? 'bg-rose-950/40 border-rose-800 text-rose-200' : 'bg-rose-50 border-rose-200 text-rose-900'
+        }`}>
           <span className="text-rose-600 font-bold text-base mt-0.5">⚠️</span>
           <div>
             <strong className="block font-bold">Audit Evaluation Failed</strong>
@@ -471,61 +868,71 @@ export function ExtractVerifyForm({
         <div className="space-y-6 animate-fadeIn">
           {/* Visual Decision Banner */}
           <div
-            className={`rounded-2xl border p-7 sm:p-8 shadow-card transition-all ${
+            className={`rounded-2xl border-2 p-7 sm:p-8 shadow-adjudo transition-all ${
               result.verification.action === 'accept'
-                ? 'bg-gradient-to-r from-emerald-50 via-white to-emerald-50/50 border-emerald-300'
+                ? isDark
+                  ? 'bg-emerald-950/40 border-emerald-600'
+                  : 'bg-emerald-50/90 border-emerald-700'
                 : result.verification.action === 'flag'
-                ? 'bg-gradient-to-r from-amber-50 via-white to-amber-50/50 border-amber-300'
-                : 'bg-gradient-to-r from-slate-100 via-white to-slate-100 border-slate-300'
+                ? isDark
+                  ? 'bg-amber-950/40 border-amber-600'
+                  : 'bg-amber-50/90 border-amber-700'
+                : isDark
+                ? 'bg-neutral-900 border-neutral-700'
+                : 'bg-cream-100 border-neutral-900'
             }`}
           >
             <div className="flex flex-col md:flex-row justify-between md:items-center gap-5">
               <div>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  <span className={`text-xs font-black uppercase tracking-wider ${isDark ? 'text-neutral-400' : 'text-neutral-700'}`}>
                     Audit Decision &bull; ID: {result.claim.claim_id}
                   </span>
                   <VerificationBadge action={result.verification.action} size="sm" />
                   <VerdictBadge verdict={result.verification.verdict} />
                 </div>
 
-                <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+                <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${isDark ? 'text-white' : 'text-neutral-950'}`}>
                   {result.verification.action === 'accept' && (
-                    <span className="text-emerald-900">Approved: Matches Medical Guidelines</span>
+                    <span className={isDark ? 'text-emerald-300' : 'text-emerald-950'}>Approved: Matches Medical Guidelines</span>
                   )}
                   {result.verification.action === 'flag' && (
-                    <span className="text-amber-950">Flagged for Review: Potential Issue Detected</span>
+                    <span className={isDark ? 'text-amber-300' : 'text-amber-950'}>Flagged for Review: Potential Issue Detected</span>
                   )}
                   {result.verification.action === 'abstain' && (
-                    <span className="text-slate-900">Not enough reliable evidence to make a decision</span>
+                    <span className={isDark ? 'text-neutral-200' : 'text-neutral-950'}>Not enough reliable evidence to make a decision</span>
                   )}
                 </h2>
 
-                <p className="text-sm sm:text-base text-slate-700 mt-2 max-w-3xl leading-relaxed">
+                <p className={`text-sm sm:text-base mt-2 max-w-3xl leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
                   {result.verification.action === 'abstain'
                     ? 'The system safely held this claim instead of guessing because sufficient verified guidelines or pricing benchmarks are not yet available.'
                     : result.verification.reasoning}
                 </p>
 
                 {/* Plain-English "What this means & What to do next" */}
-                <div className="mt-4 p-4 rounded-xl bg-white/90 border border-slate-200 text-xs sm:text-sm space-y-1.5 shadow-subtle">
-                  <div className="font-bold text-slate-900 flex items-center gap-2">
+                <div className={`mt-4 p-4 rounded-xl border text-xs sm:text-sm space-y-1.5 shadow-adjudo-sm ${
+                  isDark
+                    ? 'bg-neutral-900/90 border-neutral-700 text-neutral-200'
+                    : 'bg-white border-neutral-900 text-neutral-900'
+                }`}>
+                  <div className={`font-black flex items-center gap-2 ${isDark ? 'text-white' : 'text-neutral-950'}`}>
                     <span className="text-base">💡</span>
                     <span>What this means &amp; What you can do next:</span>
                   </div>
                   {result.verification.action === 'flag' && (
-                    <p className="text-slate-600 leading-relaxed">
+                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
                       <strong>Recommendation:</strong> The billed amount appears higher than the available comparison price, or clinical guidelines advise caution.
                       You can request an itemized hospital bill with procedure codes (CPT/HCPCS), ask for in-network pricing, or contact your provider for billing clarification.
                     </p>
                   )}
                   {result.verification.action === 'accept' && (
-                    <p className="text-slate-600 leading-relaxed">
+                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
                       <strong>Recommendation:</strong> The procedure indication aligns with published medical guidelines and the billed charges fall within standard fair pricing benchmarks.
                     </p>
                   )}
                   {result.verification.action === 'abstain' && (
-                    <p className="text-slate-600 leading-relaxed">
+                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
                       <strong>Recommendation:</strong> Not enough reliable evidence to make an automated decision. Ask your hospital for the exact procedure code (CPT) or check with your insurer to clarify coverage without ungrounded assumptions.
                     </p>
                   )}
@@ -537,7 +944,7 @@ export function ExtractVerifyForm({
                 <button
                   type="button"
                   onClick={handleClear}
-                  className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs sm:text-sm font-bold transition-colors shadow-subtle whitespace-nowrap flex items-center gap-2"
+                  className="adjudo-btn-secondary px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap flex items-center gap-2 cursor-pointer"
                   title="Clear this audit and evaluate a new document"
                 >
                   <span>🔄</span>
@@ -547,7 +954,7 @@ export function ExtractVerifyForm({
                 <button
                   type="button"
                   onClick={() => readClaimAloud()}
-                  className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs sm:text-sm font-bold transition-colors shadow-subtle whitespace-nowrap flex items-center gap-2"
+                  className="adjudo-btn-secondary px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap flex items-center gap-2 cursor-pointer"
                   title="Read audit decision aloud using browser AI voice (English / ಕನ್ನಡ)"
                 >
                   <span>🔊</span>
@@ -556,7 +963,7 @@ export function ExtractVerifyForm({
 
                 <Link
                   to={`/claims/${encodeURIComponent(result.claim.claim_id)}`}
-                  className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold transition-colors shadow-sm whitespace-nowrap"
+                  className="adjudo-btn-dark px-5 py-2.5 rounded-xl text-xs sm:text-sm font-black whitespace-nowrap cursor-pointer"
                 >
                   View Full 7-Stage Audit &rarr;
                 </Link>
@@ -565,8 +972,10 @@ export function ExtractVerifyForm({
 
             {/* Abstention specific callout */}
             {result.verification.action === 'abstain' && (
-              <div className="mt-4 p-4 rounded-xl bg-slate-200/80 border border-slate-300 text-sm text-slate-800 leading-relaxed">
-                <strong className="font-bold text-slate-900 block mb-1">
+              <div className={`mt-4 p-4 rounded-xl border text-sm leading-relaxed ${
+                isDark ? 'bg-neutral-800 border-neutral-700 text-neutral-200' : 'bg-cream-200 border-neutral-900 text-neutral-900'
+              }`}>
+                <strong className={`font-black block mb-1 ${isDark ? 'text-white' : 'text-neutral-950'}`}>
                   Safe Refusal Enforced:
                 </strong>
                 {result.verification.abstain_reason ||
@@ -575,30 +984,57 @@ export function ExtractVerifyForm({
             )}
           </div>
 
+          {/* Five Integrated AI Models Pipeline Breakdown */}
+          <FiveModelsAuditPanel
+            claimId={result.claim.claim_id}
+            sharedContext={result.verification.shared_context}
+            synthesis={result.verification.synthesis}
+            nerEntities={result.verification.ner_entities}
+            nerGroupedInfo={result.verification.ner_grouped_info}
+            retrievalPassages={result.verification.passages_considered?.map((p) => ({
+              passage_id: p.passage_id,
+              guideline_id: p.guideline_id,
+              title: p.title,
+              source: p.source,
+              text: p.text,
+              similarity_score: p.relevance_score,
+              model_name: 'BGE Small en-v1.5',
+            }))}
+            nliResult={result.verification.nli_result}
+            providerAnomaly={result.verification.provider_anomaly}
+            claimAnomaly={result.verification.claim_anomaly}
+            medicineSubstitution={result.verification.medicine_substitution}
+            billingReconciliation={result.verification.billing_reconciliation}
+            requiresHumanReview={result.verification.requires_human_review}
+            humanReviewReasons={result.verification.human_review_reasons}
+          />
+
           {/* Post-Processing Clinical & Prescription Summary (Collapsible by default) */}
           <PostProcessingSummary result={result} />
 
           {/* Pricing Benchmark Visual (if anomaly or benchmark exists) */}
           {result.verification.cost_anomaly_flag && anomaly && (
-            <div className="bg-white rounded-2xl border border-rose-200 p-6 sm:p-8 shadow-card">
+            <div className={`rounded-2xl border p-6 sm:p-8 shadow-card transition-colors ${
+              isDark ? 'bg-slate-900 border-rose-900/60' : 'bg-white border-rose-200'
+            }`}>
               <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-5">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-200 uppercase">
                       Price Alert
                     </span>
-                    <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                    <h3 className={`text-base sm:text-lg font-bold ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
                       Unusually High Charge Detected ({multiplier.toFixed(1)}× Benchmark)
                     </h3>
                   </div>
-                  <p className="text-xs sm:text-sm text-slate-500 mt-1">
+                  <p className={`text-xs sm:text-sm mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                     The billed amount appears higher than the available comparison price (CMS Medicare and Fair Health fee schedules).
                   </p>
                 </div>
 
                 <div className="text-right">
-                  <span className="text-xs text-slate-400 font-medium">Billed Amount:</span>
-                  <div className="text-2xl font-black font-mono text-rose-700">
+                  <span className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-400'}`}>Billed Amount:</span>
+                  <div className="text-2xl font-black font-mono text-rose-600 dark:text-rose-400">
                     {formatCurrency(billedAmount, docCurrency, { showCode: true })}
                   </div>
                 </div>

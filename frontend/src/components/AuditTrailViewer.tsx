@@ -1,16 +1,17 @@
 import React, { useState } from 'react'
-import type { AuditTrail, DecisionStep, EvidencePassage } from '../types'
+import type { AuditTrail, DecisionStep, EvidencePassage, VerificationResult } from '../types'
 import { VerificationBadge, VerdictBadge } from './VerificationBadge'
 import { formatCurrency } from '../utils/currency'
 
 interface AuditTrailViewerProps {
   auditTrail: AuditTrail
+  verification?: VerificationResult | null
 }
 
 const STAGE_TITLES: Record<string, { title: string; subtitle: string; icon: string }> = {
   EXTRACTION: {
-    title: 'Reading Document',
-    subtitle: 'Extracts procedure codes, clinical entities, and billed amounts',
+    title: 'Model 1: BioBERT Reading Document',
+    subtitle: 'Extracts Indian healthcare entities, procedure codes, and billed amounts',
     icon: '📄',
   },
   PROVENANCE: {
@@ -19,8 +20,8 @@ const STAGE_TITLES: Record<string, { title: string; subtitle: string; icon: stri
     icon: '🔐',
   },
   HYBRID_RETRIEVAL: {
-    title: 'Finding Medical Guidelines',
-    subtitle: 'Searches authoritative clinical guidelines via hybrid BM25 + semantic embeddings',
+    title: 'Model 2: BGE Evidence Retrieval',
+    subtitle: 'Searches authoritative clinical guidelines via 384-d semantic BGE embeddings',
     icon: '🔎',
   },
   COST_AUDIT: {
@@ -29,23 +30,33 @@ const STAGE_TITLES: Record<string, { title: string; subtitle: string; icon: stri
     icon: '💰',
   },
   CLINICAL_VERIFICATION: {
-    title: 'Clinical Review',
-    subtitle: 'Evaluates medical necessity and guideline alignment using local reasoning model',
+    title: 'Model 3: DeBERTa NLI Cross-Examination',
+    subtitle: 'Evaluates claim statement against evidence for entailment, contradiction, or neutral',
     icon: '🩺',
   },
+  PROVIDER_SCREENING: {
+    title: 'Model 4: Provider Anomaly Screening',
+    subtitle: 'Isolation Forest V3 evaluation of provider billing metrics',
+    icon: '🏥',
+  },
+  CLAIM_SCREENING: {
+    title: 'Model 5: Claim Anomaly Screening',
+    subtitle: 'Isolation Forest V3 Strict Temporal screening of individual claim ratios',
+    icon: '📑',
+  },
   ABSTENTION_GATE: {
-    title: 'Safety Gate',
+    title: 'Safety Gate & Human Review',
     subtitle: 'Deterministic safeguards ensure the system holds claims when evidence is missing',
     icon: '🛡️',
   },
   FINAL_ACTION: {
-    title: 'Final Decision',
+    title: 'Final Decision & Audit Synthesis',
     subtitle: 'Synthesizes clinical verification, cost anomaly checks, and safety policies',
     icon: '⚖️',
   },
 }
 
-export function AuditTrailViewer({ auditTrail }: AuditTrailViewerProps) {
+export function AuditTrailViewer({ auditTrail, verification }: AuditTrailViewerProps) {
   const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({
     0: false,
     3: true,
@@ -117,6 +128,30 @@ export function AuditTrailViewer({ auditTrail }: AuditTrailViewerProps) {
         <p className="text-sm text-slate-800 leading-relaxed font-medium">
           {auditTrail.final_reasoning}
         </p>
+
+        {/* Human Review Required Banner */}
+        {verification?.requires_human_review && (
+          <div className="mt-3.5 p-4 rounded-xl bg-rose-50 border border-rose-300 text-xs text-rose-950 flex items-start gap-3 shadow-subtle">
+            <span className="text-lg flex-shrink-0">⚠️</span>
+            <div className="flex-1 space-y-1">
+              <strong className="font-bold block text-rose-950 text-xs uppercase tracking-wide">
+                Human Auditor Review Required
+              </strong>
+              <p className="text-rose-900 leading-relaxed">
+                Safety gates or AI models have flagged this claim for mandatory human audit:
+              </p>
+              <ul className="list-disc list-inside space-y-0.5 text-rose-900 font-medium pl-1">
+                {verification.human_review_reasons && verification.human_review_reasons.length > 0 ? (
+                  verification.human_review_reasons.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))
+                ) : (
+                  <li>Model prediction flagged for supervisory review.</li>
+                )}
+              </ul>
+            </div>
+          </div>
+        )}
 
         {/* Policy Override Banner */}
         {auditTrail.policy_override_applied && (
