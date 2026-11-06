@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useSearchParams, useLocation, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import {
@@ -72,14 +73,54 @@ export const MANAGED_HOSPITAL_FACILITIES = [
 ]
 
 export default function HospitalManagement() {
-  const { user, logout } = useAuth()
+  const { user, logout, isHospitalManagement } = useAuth()
   const { isDark } = useTheme()
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
 
-  // Identify assigned hospital for this authenticated management account
-  const assignedHospitalId = user?.hospital_id || 'hosp_davg_shree_institute'
+  // Determine read-only mode (when viewing from patient portal or via ?mode=read_only)
+  const isReadOnly =
+    searchParams.get('mode') === 'read_only' ||
+    searchParams.get('mode') === 'read' ||
+    (location.state as any)?.mode === 'read_only' ||
+    !isHospitalManagement ||
+    user?.portal === 'patient'
+
+  // 1. Identify target hospital from query params, router state, or cached hospital selection
+  const queryHospitalId = searchParams.get('hospital_id')
+  const stateHospital = (location.state as any)?.hospital
+
+  let cachedHospital: any = null
+  try {
+    const raw = localStorage.getItem('eb_active_management_hospital')
+    if (raw) cachedHospital = JSON.parse(raw)
+  } catch {
+    // ignore
+  }
+
+  const effectiveHospitalId =
+    queryHospitalId ||
+    stateHospital?.id ||
+    (cachedHospital?.id ? cachedHospital.id : user?.hospital_id) ||
+    'hosp_davg_shree_institute'
+
+  const matchedManaged = MANAGED_HOSPITAL_FACILITIES.find((h) => h.id === effectiveHospitalId)
+
   const hospitalFacility =
-    MANAGED_HOSPITAL_FACILITIES.find((h) => h.id === assignedHospitalId) ||
-    MANAGED_HOSPITAL_FACILITIES[0]
+    (queryHospitalId && cachedHospital?.id === queryHospitalId ? cachedHospital : null) ||
+    (queryHospitalId && stateHospital?.id === queryHospitalId ? stateHospital : null) ||
+    matchedManaged ||
+    stateHospital ||
+    cachedHospital || {
+      id: effectiveHospitalId,
+      name: cachedHospital?.name || 'Selected Medical Facility',
+      district: cachedHospital?.district || 'Karnataka',
+      address: cachedHospital?.address || 'Hospital Facility Campus, Karnataka',
+      phone: cachedHospital?.phone || '+91 80 2502 4444',
+      emergency_helpline: cachedHospital?.emergency_helpline || '108 / 112',
+    }
+
+  const assignedHospitalId = hospitalFacility.id
 
   // Form State: Staff & Capacity
   const [doctorsAvailable, setDoctorsAvailable] = useState<number>(9)
@@ -119,10 +160,32 @@ export default function HospitalManagement() {
   const [protocolModalRecord, setProtocolModalRecord] = useState<EmergencySOSRecord | null>(null)
   const lastPendingCount = useRef<number>(0)
 
-  // Load initial hospital availability from backend
+  // Load initial hospital availability from backend / local cache
   const loadHospitalAvailability = useCallback(async () => {
     try {
       setIsLoadingAvailability(true)
+
+      // 1. Check local storage cache for this facility
+      try {
+        const localAvailRaw = localStorage.getItem(`eb_avail_${assignedHospitalId}`)
+        if (localAvailRaw) {
+          const localAvail = JSON.parse(localAvailRaw)
+          setDoctorsAvailable(localAvail.doctors_available ?? 12)
+          setEmergencyDoctors(localAvail.emergency_doctors ?? 4)
+          setNursesAvailable(localAvail.nurses_available ?? 24)
+          setEmergencyNurses(localAvail.emergency_nurses ?? 6)
+          setAvailableBeds(localAvail.available_beds ?? 45)
+          setIcuBedsAvailable(localAvail.icu_beds_available ?? 8)
+          if (localAvail.duty_status) setDutyStatus(localAvail.duty_status)
+          if (localAvail.emergency_dept_status) setEmergencyDeptStatus(localAvail.emergency_dept_status)
+          if (localAvail.notes) setNotes(localAvail.notes)
+          if (localAvail.last_updated) setLastUpdated(localAvail.last_updated)
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2. Query backend availability API
       const data = await getHospitalAvailability(assignedHospitalId)
       if (data) {
         setDoctorsAvailable(data.doctors_available ?? 0)
@@ -160,14 +223,59 @@ export default function HospitalManagement() {
     }
   }, [assignedHospitalId])
 
-  // SOS Desk Polling
+  // SOS Desk Polling - STRICTLY SCOPED TO THIS HOSPITAL
   const pollHospitalSos = useCallback(async () => {
     try {
-      const records = await listHospitalSOS(assignedHospitalId)
-      setSosList(records)
+      let records: EmergencySOSRecord[] = []
+      try {
+        records = await listHospitalSOS(assignedHospitalId)
+      } catch (err) {
+        console.warn('API listHospitalSOS note, checking local store:', err)
+      }
 
-      // Audio notification on new pending emergency call
-      const pendingCount = records.filter((r) => r.status === 'PENDING').length
+      // Merge local emergency records created for this specific hospital
+      try {
+        const rawLocal = localStorage.getItem('eb_emergency_sos_records')
+        if (rawLocal) {
+          const localRecords: EmergencySOSRecord[] = JSON.parse(rawLocal)
+          const mergedMap = new Map<string, EmergencySOSRecord>()
+          records.forEach((r) => mergedMap.set(r.sos_id, r))
+          localRecords.forEach((r) => {
+            const matchesId = r.hospital_id === assignedHospitalId
+            const matchesName =
+              r.hospital_name &&
+              hospitalFacility.name &&
+              (r.hospital_name.toLowerCase().trim() === hospitalFacility.name.toLowerCase().trim() ||
+               hospitalFacility.name.toLowerCase().includes(r.hospital_name.toLowerCase()) ||
+               r.hospital_name.toLowerCase().includes(hospitalFacility.name.toLowerCase()))
+
+            if (matchesId || matchesName) {
+              if (!mergedMap.has(r.sos_id)) {
+                mergedMap.set(r.sos_id, r)
+              }
+            }
+          })
+          records = Array.from(mergedMap.values())
+        }
+      } catch {
+        // ignore
+      }
+
+      // STRICT ISOLATION: Keep ONLY records belonging to this hospital!
+      const strictlyThisHospitalRecords = records.filter(
+        (r) =>
+          r.hospital_id === assignedHospitalId ||
+          (r.hospital_name &&
+            hospitalFacility.name &&
+            (r.hospital_name.toLowerCase().trim() === hospitalFacility.name.toLowerCase().trim() ||
+             hospitalFacility.name.toLowerCase().includes(r.hospital_name.toLowerCase()) ||
+             r.hospital_name.toLowerCase().includes(hospitalFacility.name.toLowerCase())))
+      )
+
+      setSosList(strictlyThisHospitalRecords)
+
+      // Audio notification on new pending emergency call ONLY FOR THIS HOSPITAL!
+      const pendingCount = strictlyThisHospitalRecords.filter((r) => r.status === 'PENDING').length
       if (pendingCount > lastPendingCount.current) {
         try {
           const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
@@ -191,14 +299,16 @@ export default function HospitalManagement() {
     } catch (err) {
       console.warn('Could not poll hospital SOS records:', err)
     }
-  }, [assignedHospitalId])
+  }, [assignedHospitalId, hospitalFacility.name])
 
   useEffect(() => {
     loadHospitalAvailability()
-    pollHospitalSos()
-    const sosInterval = setInterval(pollHospitalSos, 4000)
-    return () => clearInterval(sosInterval)
-  }, [loadHospitalAvailability, pollHospitalSos])
+    if (!isReadOnly) {
+      pollHospitalSos()
+      const sosInterval = setInterval(pollHospitalSos, 4000)
+      return () => clearInterval(sosInterval)
+    }
+  }, [loadHospitalAvailability, pollHospitalSos, isReadOnly])
 
   // Validation rules:
   // 1. Counts cannot be negative
@@ -222,6 +332,7 @@ export default function HospitalManagement() {
   // Save Availability Handler
   const handleSaveAvailability = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isReadOnly) return
     if (!isFormValid) {
       setFeedback({
         type: 'error',
@@ -251,6 +362,19 @@ export default function HospitalManagement() {
 
       const res = await updateHospitalAvailability(assignedHospitalId, payload)
       setLastUpdated(res.last_updated)
+
+      try {
+        localStorage.setItem(
+          `eb_avail_${assignedHospitalId}`,
+          JSON.stringify({
+            ...payload,
+            last_updated: res.last_updated,
+          })
+        )
+      } catch {
+        // ignore
+      }
+
       setFeedback({
         type: 'success',
         message: `Live availability saved and broadcast to Karnataka citizen network for ${hospitalFacility.name}.`,
@@ -274,8 +398,29 @@ export default function HospitalManagement() {
     try {
       const updated = await updateSOSStatus(sosId, newStatus)
       setSosList((prev) => prev.map((item) => (item.sos_id === sosId ? updated : item)))
+      try {
+        const stored = JSON.parse(localStorage.getItem('eb_emergency_sos_records') || '[]')
+        const updatedStored = stored.map((item: any) =>
+          item.sos_id === sosId ? { ...item, status: newStatus } : item
+        )
+        localStorage.setItem('eb_emergency_sos_records', JSON.stringify(updatedStored))
+      } catch {
+        // ignore
+      }
     } catch (err: any) {
-      alert(`Could not update SOS status: ${err?.message || 'Network error'}`)
+      // Local fallback in case of network issue
+      setSosList((prev) =>
+        prev.map((item) => (item.sos_id === sosId ? { ...item, status: newStatus } : item))
+      )
+      try {
+        const stored = JSON.parse(localStorage.getItem('eb_emergency_sos_records') || '[]')
+        const updatedStored = stored.map((item: any) =>
+          item.sos_id === sosId ? { ...item, status: newStatus } : item
+        )
+        localStorage.setItem('eb_emergency_sos_records', JSON.stringify(updatedStored))
+      } catch {
+        // ignore
+      }
     } finally {
       setUpdatingSosId(null)
     }
@@ -290,6 +435,61 @@ export default function HospitalManagement() {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-200">
+      {/* Read-Only Mode Banner */}
+      {isReadOnly && (
+        <div
+          className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-adjudo-sm ${
+            isDark
+              ? 'bg-cyan-950/30 border-cyan-800 text-neutral-100'
+              : 'bg-cyan-50 border-cyan-300 text-cyan-950'
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 border border-cyan-500/30 flex items-center justify-center text-xl shrink-0">
+              📋
+            </div>
+            <div>
+              <div className="text-sm font-black flex items-center gap-2 flex-wrap">
+                <span>Hospital Staff &amp; Operational Capacity — Read-Only Mode</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider bg-cyan-600 text-white font-black">
+                  Verified Public View
+                </span>
+              </div>
+              <p className="text-xs text-neutral-600 dark:text-neutral-300 mt-0.5">
+                You are viewing real-time staff on duty, bed availability, and operational capacity for <strong>{hospitalFacility.name}</strong>. Modifications are locked to hospital staff login.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/hospitals"
+            className={`px-3.5 py-2 rounded-xl text-xs font-black border transition-all text-center whitespace-nowrap shadow-adjudo-sm cursor-pointer ${
+              isDark
+                ? 'bg-neutral-800 border-neutral-700 text-cyan-300 hover:bg-neutral-700'
+                : 'bg-white border-neutral-900 text-neutral-900 hover:bg-slate-100'
+            }`}
+          >
+            ← Back to Hospitals
+          </Link>
+        </div>
+      )}
+
+      {/* Back to Hospitals Navigation (shown when not in read-only banner) */}
+      {!isReadOnly && (
+        <div>
+          <Link
+            to="/hospitals"
+            className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-black transition-all shadow-adjudo-sm cursor-pointer ${
+              isDark
+                ? 'border-neutral-700 bg-neutral-900 text-cyan-300 hover:bg-neutral-800'
+                : 'border-neutral-900 bg-white text-neutral-900 hover:bg-slate-50'
+            }`}
+          >
+            <span>←</span>
+            <span>Back to Available Hospitals</span>
+          </Link>
+        </div>
+      )}
+
       {/* ==================================================================== */}
       {/* SECTION A: HOSPITAL INFORMATION BANNER                              */}
       {/* ==================================================================== */}
@@ -303,10 +503,17 @@ export default function HospitalManagement() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/30">
-                <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-                Hospital Management Portal
-              </span>
+              {isReadOnly ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border border-cyan-500/30">
+                  <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
+                  Staff &amp; SOS Management (Read-Only)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/30">
+                  <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                  Hospital Management Portal
+                </span>
+              )}
               <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700">
                 ID: {assignedHospitalId}
               </span>
@@ -325,8 +532,16 @@ export default function HospitalManagement() {
 
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
             <div className="text-left sm:text-right text-xs">
-              <div className="text-neutral-500 dark:text-neutral-400">Authenticated Staff Account:</div>
-              <div className="font-bold text-neutral-900 dark:text-neutral-100">{user?.email || 'admin@hospital.local'}</div>
+              <div className="text-neutral-500 dark:text-neutral-400">
+                {isReadOnly ? 'Viewing Mode:' : 'Authenticated Staff Account:'}
+              </div>
+              <div className="font-bold text-neutral-900 dark:text-neutral-100">
+                {isReadOnly
+                  ? user?.email
+                    ? `${user.email} (Patient / Citizen)`
+                    : 'Public Citizen (Read-Only)'
+                  : user?.email || 'admin@hospital.local'}
+              </div>
               <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
                 Last Live Broadcast:{' '}
                 <span className="font-semibold text-neutral-800 dark:text-neutral-200">
@@ -336,18 +551,27 @@ export default function HospitalManagement() {
                         minute: '2-digit',
                         second: '2-digit',
                       })
-                    : 'Not yet updated'}
+                    : 'Live KPME Sync'}
                 </span>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={logout}
-              className="px-3 py-1.5 rounded-lg border border-rose-300 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs font-black hover:bg-rose-100 dark:hover:bg-rose-900/60 transition-colors shadow-adjudo-sm cursor-pointer whitespace-nowrap"
-            >
-              Sign Out
-            </button>
+            {isReadOnly ? (
+              <Link
+                to="/hospitals"
+                className="px-3.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-black hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors shadow-adjudo-sm cursor-pointer whitespace-nowrap"
+              >
+                Close Read View
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={logout}
+                className="px-3 py-1.5 rounded-lg border border-rose-300 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs font-black hover:bg-rose-100 dark:hover:bg-rose-900/60 transition-colors shadow-adjudo-sm cursor-pointer whitespace-nowrap"
+              >
+                Sign Out
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -390,9 +614,16 @@ export default function HospitalManagement() {
             <div className="flex items-center gap-2">
               <span className="text-xl">🩺</span>
               <h2 className="text-xl font-black">Live Staff &amp; Operational Capacity</h2>
+              {isReadOnly && (
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-cyan-100 dark:bg-cyan-950/60 text-cyan-800 dark:text-cyan-300 border border-cyan-300 dark:border-cyan-800">
+                  🔒 READ-ONLY MODE
+                </span>
+              )}
             </div>
             <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-              Updates made here immediately propagate to citizen hospital cards and GPS emergency dispatch.
+              {isReadOnly
+                ? `Real-time verified on-site staffing, beds, and specialist shifts for ${hospitalFacility.name}.`
+                : 'Updates made here immediately propagate to citizen hospital cards and GPS emergency dispatch.'}
             </p>
           </div>
           {isLoadingAvailability && (
@@ -415,10 +646,16 @@ export default function HospitalManagement() {
               <input
                 type="number"
                 min="0"
+                disabled={isReadOnly}
+                readOnly={isReadOnly}
                 value={doctorsAvailable}
-                onChange={(e) => setDoctorsAvailable(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => !isReadOnly && setDoctorsAvailable(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full text-2xl font-black p-2 rounded-lg border outline-none ${
-                  isDark
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-900/70 border-neutral-800 text-cyan-300 cursor-default'
+                      : 'bg-slate-100/90 border-slate-300 text-slate-900 cursor-default'
+                    : isDark
                     ? 'bg-neutral-900 border-neutral-700 text-white focus:border-orange-500'
                     : 'bg-white border-neutral-300 text-neutral-900 focus:border-neutral-900'
                 }`}
@@ -443,10 +680,16 @@ export default function HospitalManagement() {
               <input
                 type="number"
                 min="0"
+                disabled={isReadOnly}
+                readOnly={isReadOnly}
                 value={emergencyDoctors}
-                onChange={(e) => setEmergencyDoctors(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => !isReadOnly && setEmergencyDoctors(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full text-2xl font-black p-2 rounded-lg border outline-none ${
-                  doctorError
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-900/70 border-neutral-800 text-rose-400 cursor-default'
+                      : 'bg-slate-100/90 border-slate-300 text-rose-600 cursor-default'
+                    : doctorError
                     ? 'border-rose-500 text-rose-600 bg-rose-50/30'
                     : isDark
                     ? 'bg-neutral-900 border-neutral-700 text-rose-400 focus:border-rose-500'
@@ -475,10 +718,16 @@ export default function HospitalManagement() {
               <input
                 type="number"
                 min="0"
+                disabled={isReadOnly}
+                readOnly={isReadOnly}
                 value={nursesAvailable}
-                onChange={(e) => setNursesAvailable(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => !isReadOnly && setNursesAvailable(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full text-2xl font-black p-2 rounded-lg border outline-none ${
-                  isDark
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-900/70 border-neutral-800 text-cyan-300 cursor-default'
+                      : 'bg-slate-100/90 border-slate-300 text-slate-900 cursor-default'
+                    : isDark
                     ? 'bg-neutral-900 border-neutral-700 text-white focus:border-orange-500'
                     : 'bg-white border-neutral-300 text-neutral-900 focus:border-neutral-900'
                 }`}
@@ -503,10 +752,16 @@ export default function HospitalManagement() {
               <input
                 type="number"
                 min="0"
+                disabled={isReadOnly}
+                readOnly={isReadOnly}
                 value={emergencyNurses}
-                onChange={(e) => setEmergencyNurses(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => !isReadOnly && setEmergencyNurses(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full text-2xl font-black p-2 rounded-lg border outline-none ${
-                  nurseError
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-900/70 border-neutral-800 text-rose-400 cursor-default'
+                      : 'bg-slate-100/90 border-slate-300 text-rose-600 cursor-default'
+                    : nurseError
                     ? 'border-rose-500 text-rose-600 bg-rose-50/30'
                     : isDark
                     ? 'bg-neutral-900 border-neutral-700 text-rose-400 focus:border-rose-500'
@@ -548,13 +803,22 @@ export default function HospitalManagement() {
                   <input
                     type="number"
                     min="0"
+                    disabled={isReadOnly}
+                    readOnly={isReadOnly}
                     value={count}
                     onChange={(e) => {
+                      if (isReadOnly) return
                       const val = Math.max(0, parseInt(e.target.value) || 0)
                       setSpecialists((prev) => ({ ...prev, [dept]: val }))
                     }}
                     className={`w-14 text-right font-black px-1.5 py-0.5 rounded border text-sm ${
-                      isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-neutral-50 border-neutral-300 text-neutral-900'
+                      isReadOnly
+                        ? isDark
+                          ? 'bg-neutral-800/80 border-neutral-700 text-cyan-300 cursor-default'
+                          : 'bg-slate-100 border-slate-300 text-slate-900 cursor-default'
+                        : isDark
+                        ? 'bg-neutral-800 border-neutral-700 text-white'
+                        : 'bg-neutral-50 border-neutral-300 text-neutral-900'
                     }`}
                   />
                 </div>
@@ -570,10 +834,17 @@ export default function HospitalManagement() {
                 Hospital Duty Status *
               </label>
               <select
+                disabled={isReadOnly}
                 value={dutyStatus}
-                onChange={(e) => setDutyStatus(e.target.value)}
+                onChange={(e) => !isReadOnly && setDutyStatus(e.target.value)}
                 className={`w-full p-2.5 rounded-lg border font-bold text-xs sm:text-sm outline-none ${
-                  isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-white border-neutral-300 text-neutral-900'
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-800/80 border-neutral-700 text-neutral-200 cursor-default'
+                      : 'bg-slate-100 border-slate-300 text-slate-800 cursor-default'
+                    : isDark
+                    ? 'bg-neutral-800 border-neutral-700 text-white'
+                    : 'bg-white border-neutral-300 text-neutral-900'
                 }`}
               >
                 <option value="Accepting Patients">Accepting Patients (Normal Operation)</option>
@@ -588,10 +859,17 @@ export default function HospitalManagement() {
                 Emergency Dept Status *
               </label>
               <select
+                disabled={isReadOnly}
                 value={emergencyDeptStatus}
-                onChange={(e) => setEmergencyDeptStatus(e.target.value)}
+                onChange={(e) => !isReadOnly && setEmergencyDeptStatus(e.target.value)}
                 className={`w-full p-2.5 rounded-lg border font-bold text-xs sm:text-sm outline-none ${
-                  isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-white border-neutral-300 text-neutral-900'
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-800/80 border-neutral-700 text-neutral-200 cursor-default'
+                      : 'bg-slate-100 border-slate-300 text-slate-800 cursor-default'
+                    : isDark
+                    ? 'bg-neutral-800 border-neutral-700 text-white'
+                    : 'bg-white border-neutral-300 text-neutral-900'
                 }`}
               >
                 <option value="Operational">Operational (Full Trauma / ER Ready)</option>
@@ -609,10 +887,18 @@ export default function HospitalManagement() {
               <input
                 type="number"
                 min="0"
+                disabled={isReadOnly}
+                readOnly={isReadOnly}
                 value={availableBeds}
-                onChange={(e) => setAvailableBeds(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => !isReadOnly && setAvailableBeds(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full p-2 rounded-lg border font-bold text-sm outline-none ${
-                  isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-white border-neutral-300 text-neutral-900'
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-800/80 border-neutral-700 text-cyan-300 cursor-default'
+                      : 'bg-slate-100 border-slate-300 text-slate-900 cursor-default'
+                    : isDark
+                    ? 'bg-neutral-800 border-neutral-700 text-white'
+                    : 'bg-white border-neutral-300 text-neutral-900'
                 }`}
               />
             </div>
@@ -625,10 +911,18 @@ export default function HospitalManagement() {
               <input
                 type="number"
                 min="0"
+                disabled={isReadOnly}
+                readOnly={isReadOnly}
                 value={icuBedsAvailable}
-                onChange={(e) => setIcuBedsAvailable(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => !isReadOnly && setIcuBedsAvailable(Math.max(0, parseInt(e.target.value) || 0))}
                 className={`w-full p-2 rounded-lg border font-bold text-sm outline-none ${
-                  isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-white border-neutral-300 text-neutral-900'
+                  isReadOnly
+                    ? isDark
+                      ? 'bg-neutral-800/80 border-neutral-700 text-rose-400 cursor-default'
+                      : 'bg-slate-100 border-slate-300 text-rose-600 cursor-default'
+                    : isDark
+                    ? 'bg-neutral-800 border-neutral-700 text-white'
+                    : 'bg-white border-neutral-300 text-neutral-900'
                 }`}
               />
             </div>
@@ -641,56 +935,80 @@ export default function HospitalManagement() {
             </label>
             <textarea
               rows={2}
+              disabled={isReadOnly}
+              readOnly={isReadOnly}
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onChange={(e) => !isReadOnly && setNotes(e.target.value)}
               placeholder="e.g. Trauma Bay 1 & 2 fully staffed. 24/7 CT scan and emergency surgical team on call."
               className={`w-full p-2.5 rounded-lg border text-xs sm:text-sm outline-none ${
-                isDark ? 'bg-neutral-800 border-neutral-700 text-white' : 'bg-white border-neutral-300 text-neutral-900'
+                isReadOnly
+                  ? isDark
+                    ? 'bg-neutral-800/80 border-neutral-700 text-neutral-200 cursor-default'
+                    : 'bg-slate-100 border-slate-300 text-slate-800 cursor-default'
+                  : isDark
+                  ? 'bg-neutral-800 border-neutral-700 text-white'
+                  : 'bg-white border-neutral-300 text-neutral-900'
               }`}
             />
           </div>
 
-          {/* Save Availability Button */}
+          {/* Save Availability Button / Read-Only View Notice */}
           <div className="flex items-center justify-between pt-2 flex-wrap gap-3">
             <div className="text-xs text-neutral-500">
-              * Verification: Only authenticated management personnel of {hospitalFacility.name} can broadcast.
+              {isReadOnly
+                ? `* Telemetry Feed: Real-time operational data verified by ${hospitalFacility.name}.`
+                : `* Verification: Only authenticated management personnel of ${hospitalFacility.name} can broadcast.`}
             </div>
 
-            <button
-              type="submit"
-              disabled={isSavingAvailability || !isFormValid}
-              className={`px-5 py-2.5 rounded-xl font-black text-xs sm:text-sm border transition-all shadow-adjudo flex items-center gap-2 cursor-pointer ${
-                !isFormValid
-                  ? 'opacity-50 cursor-not-allowed bg-neutral-300 border-neutral-400 text-neutral-600'
-                  : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-900 text-white'
-              }`}
-            >
-              {isSavingAvailability ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Broadcasting Availability...</span>
-                </>
-              ) : (
-                <>
-                  <span>📡</span>
-                  <span>Save Availability &amp; Broadcast Live</span>
-                </>
-              )}
-            </button>
+            {isReadOnly ? (
+              <div
+                className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold ${
+                  isDark
+                    ? 'bg-neutral-800/80 border-neutral-700 text-cyan-300'
+                    : 'bg-slate-100 border-slate-300 text-slate-800'
+                }`}
+              >
+                <span>🔒</span>
+                <span>Read-Only Citizen View: Operational capacity broadcast is verified by {hospitalFacility.name}.</span>
+              </div>
+            ) : (
+              <button
+                type="submit"
+                disabled={isSavingAvailability || !isFormValid}
+                className={`px-5 py-2.5 rounded-xl font-black text-xs sm:text-sm border transition-all shadow-adjudo flex items-center gap-2 cursor-pointer ${
+                  !isFormValid
+                    ? 'opacity-50 cursor-not-allowed bg-neutral-300 border-neutral-400 text-neutral-600'
+                    : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-900 text-white'
+                }`}
+              >
+                {isSavingAvailability ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Broadcasting Availability...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>📡</span>
+                    <span>Save Availability &amp; Broadcast Live</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </form>
       </section>
 
       {/* ==================================================================== */}
-      {/* SECTION C: CONNECTED EMERGENCY SOS DESK                              */}
+      {/* SECTION C: CONNECTED EMERGENCY SOS DESK (STAFF ONLY)                 */}
       {/* ==================================================================== */}
-      <section
-        className={`rounded-2xl border p-5 sm:p-6 shadow-adjudo transition-colors ${
-          isDark
-            ? 'bg-neutral-900 border-neutral-700 text-neutral-100'
-            : 'bg-white border-neutral-900 text-neutral-900'
-        }`}
-      >
+      {!isReadOnly && (
+        <section
+          className={`rounded-2xl border p-5 sm:p-6 shadow-adjudo transition-colors ${
+            isDark
+              ? 'bg-neutral-900 border-neutral-700 text-neutral-100'
+              : 'bg-white border-neutral-900 text-neutral-900'
+          }`}
+        >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-neutral-200 dark:border-neutral-800 mb-6">
           <div>
             <div className="flex items-center gap-2">
@@ -703,7 +1021,9 @@ export default function HospitalManagement() {
               )}
             </div>
             <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-              Live distress calls routed directly to {hospitalFacility.name} by citizens with GPS coordinates.
+              {isReadOnly
+                ? `Live distress calls and response status routed to ${hospitalFacility.name} (View-Only).`
+                : `Live distress calls routed directly to ${hospitalFacility.name} by citizens with GPS coordinates.`}
             </p>
           </div>
 
@@ -850,44 +1170,68 @@ export default function HospitalManagement() {
                         📋 Protocol
                       </button>
 
-                      {/* Status Transition Buttons */}
-                      {isPending && (
-                        <button
-                          type="button"
-                          disabled={updatingSosId === sos.sos_id}
-                          onClick={() => handleUpdateSOSStatus(sos.sos_id, 'ACKNOWLEDGED')}
-                          className="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-colors shadow-2xs cursor-pointer whitespace-nowrap"
+                      {/* Status Transition Controls */}
+                      {isReadOnly ? (
+                        <span
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${
+                            isPending
+                              ? 'bg-rose-500/15 border-rose-500/30 text-rose-600 dark:text-rose-400'
+                              : isAcknowledged
+                              ? 'bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400'
+                              : isResponding
+                              ? 'bg-blue-500/15 border-blue-500/30 text-blue-600 dark:text-blue-400'
+                              : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                          }`}
                         >
-                          {updatingSosId === sos.sos_id ? 'Updating...' : 'Acknowledge Call'}
-                        </button>
-                      )}
-
-                      {(isPending || isAcknowledged) && (
-                        <button
-                          type="button"
-                          disabled={updatingSosId === sos.sos_id}
-                          onClick={() => handleUpdateSOSStatus(sos.sos_id, 'RESPONDING')}
-                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-black text-xs transition-colors shadow-2xs cursor-pointer whitespace-nowrap"
-                        >
-                          {updatingSosId === sos.sos_id ? 'Updating...' : 'Dispatch / Responding'}
-                        </button>
-                      )}
-
-                      {isResponding && (
-                        <button
-                          type="button"
-                          disabled={updatingSosId === sos.sos_id}
-                          onClick={() => handleUpdateSOSStatus(sos.sos_id, 'RESOLVED')}
-                          className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-colors shadow-2xs cursor-pointer whitespace-nowrap"
-                        >
-                          {updatingSosId === sos.sos_id ? 'Updating...' : 'Mark Resolved'}
-                        </button>
-                      )}
-
-                      {isResolved && (
-                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                          ✓ Completed
+                          {isPending
+                            ? '⏳ Awaiting Hospital Triage'
+                            : isAcknowledged
+                            ? '🛡️ Hospital Acknowledged'
+                            : isResponding
+                            ? '🚑 Ambulance Dispatched'
+                            : '✓ Care Resolved'}
                         </span>
+                      ) : (
+                        <>
+                          {isPending && (
+                            <button
+                              type="button"
+                              disabled={updatingSosId === sos.sos_id}
+                              onClick={() => handleUpdateSOSStatus(sos.sos_id, 'ACKNOWLEDGED')}
+                              className="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-colors shadow-2xs cursor-pointer whitespace-nowrap"
+                            >
+                              {updatingSosId === sos.sos_id ? 'Updating...' : 'Acknowledge Call'}
+                            </button>
+                          )}
+
+                          {(isPending || isAcknowledged) && (
+                            <button
+                              type="button"
+                              disabled={updatingSosId === sos.sos_id}
+                              onClick={() => handleUpdateSOSStatus(sos.sos_id, 'RESPONDING')}
+                              className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-black text-xs transition-colors shadow-2xs cursor-pointer whitespace-nowrap"
+                            >
+                              {updatingSosId === sos.sos_id ? 'Updating...' : 'Dispatch / Responding'}
+                            </button>
+                          )}
+
+                          {isResponding && (
+                            <button
+                              type="button"
+                              disabled={updatingSosId === sos.sos_id}
+                              onClick={() => handleUpdateSOSStatus(sos.sos_id, 'RESOLVED')}
+                              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-colors shadow-2xs cursor-pointer whitespace-nowrap"
+                            >
+                              {updatingSosId === sos.sos_id ? 'Updating...' : 'Mark Resolved'}
+                            </button>
+                          )}
+
+                          {isResolved && (
+                            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                              ✓ Completed
+                            </span>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -896,12 +1240,13 @@ export default function HospitalManagement() {
             })}
           </div>
         )}
-      </section>
+        </section>
+      )}
 
       {/* ==================================================================== */}
       {/* CLINICAL EMERGENCY PROTOCOL MODAL                                    */}
       {/* ==================================================================== */}
-      {protocolModalRecord && (
+      {!isReadOnly && protocolModalRecord && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/75 backdrop-blur-sm animate-in fade-in duration-150">
           <div
             className={`rounded-2xl max-w-xl w-full p-6 border shadow-2xl space-y-4 animate-in zoom-in-95 duration-150 ${

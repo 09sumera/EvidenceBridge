@@ -734,27 +734,256 @@ class BioBERTNERService:
         dose_ent = next((e for e in entities if e.entity in ("DOSAGE", "QUANTITY") and not re.search(r"\b\d+\s*days?\b", e.text, re.I)), None)
         str_ent = next((e for e in entities if e.entity == "STRENGTH"), None)
 
-        if len(drug_entities) > 1:
-            all_med_names = [e.text.strip() for e in drug_entities]
-            disp_med = ", ".join(all_med_names)
-            medicine_group.medicine_name = GroupedField(
-                value=disp_med,
-                confidence=round(sum(e.confidence for e in drug_entities) / len(drug_entities), 4),
-                requires_human_review=any(e.requires_human_review for e in drug_entities),
-                raw_entity="MULTI_MEDICINE"
-            )
-            medicine_group.generic_name = GroupedField(
-                value=disp_med,
-                confidence=round(sum(e.confidence for e in drug_entities) / len(drug_entities), 4),
-                requires_human_review=False,
-                raw_entity="GENERIC_NAME"
-            )
-            medicine_group.active_ingredient = GroupedField(
-                value=disp_med,
-                confidence=round(sum(e.confidence for e in drug_entities) / len(drug_entities), 4),
-                requires_human_review=False,
-                raw_entity="ACTIVE_INGREDIENT"
-            )
+        # Collect distinct medicines as individual structured MedicineGroup records
+        individual_medicines: list[MedicineGroup] = []
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+        KNOWN_MED_NAMES = (
+            "Sodium Chloride", "Normal Saline", "Paracetamol", "Pantoprazole", "ORS", "Oral Rehydration Salts", "Metformin",
+            "Amoxicillin", "Azithromycin", "Ceftriaxone", "Domperidone", "Ibuprofen",
+            "Ondansetron", "Ciprofloxacin", "Atorvastatin", "Telmisartan", "Amlodipine",
+            "Rabeprazole", "Cetirizine", "Ranitidine", "Omeprazole", "Diclofenac"
+        )
+
+        def resolve_active_ingredient(med_name: str) -> str:
+            med_lower = med_name.lower()
+            for km in KNOWN_MED_NAMES:
+                if km.lower() in med_lower:
+                    return km
+            cleaned = re.sub(r"^(?:Tab\.?|Cap\.?|Syp\.?|Inj\.?|Sachet)\s*", "", med_name, flags=re.I).strip()
+            return cleaned or med_name
+
+        # Strategy 1: Tabular prescription rows with header (e.g. Medicine \t Strength \t Dosage ...)
+        header_idx = -1
+        col_map: dict[str, int] = {}
+        for idx, line in enumerate(lines):
+            if re.search(r"\b(Medicine|Drug|Tablet|Medication|Item)\b", line, re.I) and re.search(r"\b(Strength|Dosage|Duration|Quantity|Qty|Frequency|Dose)\b", line, re.I):
+                header_idx = idx
+                if "\t" in line:
+                    cols = [c.strip() for c in line.split("\t") if c.strip()]
+                elif "|" in line:
+                    cols = [c.strip() for c in line.split("|") if c.strip()]
+                else:
+                    cols = [c.strip() for c in re.split(r" {2,}", line) if c.strip()]
+
+                for c_i, c_name in enumerate(cols):
+                    c_lower = c_name.lower()
+                    if any(k in c_lower for k in ("medicine", "drug", "tablet", "item", "description")):
+                        col_map["medicine"] = c_i
+                    elif any(k in c_lower for k in ("strength", "potency")):
+                        col_map["strength"] = c_i
+                    elif any(k in c_lower for k in ("dosage", "dose")):
+                        col_map["dosage"] = c_i
+                    elif any(k in c_lower for k in ("duration", "days", "period")):
+                        col_map["duration"] = c_i
+                    elif any(k in c_lower for k in ("quantity", "qty", "units")):
+                        col_map["quantity"] = c_i
+                    elif any(k in c_lower for k in ("frequency", "timing")):
+                        col_map["frequency"] = c_i
+                    elif any(k in c_lower for k in ("instruction", "directions")):
+                        col_map["instructions"] = c_i
+                break
+
+        if header_idx != -1 and "medicine" in col_map:
+            for line in lines[header_idx + 1:]:
+                if any(term in line.lower() for term in ("subtotal", "grand total", "total:", "doctor:", "patient:", "encounter:", "hospital:", "expected", "diagnosis:", "date:", "age:")):
+                    break
+                if "\t" in line:
+                    cells = [c.strip() for c in line.split("\t") if c.strip()]
+                elif "|" in line:
+                    cells = [c.strip() for c in line.split("|") if c.strip()]
+                else:
+                    cells = [c.strip() for c in re.split(r" {2,}", line) if c.strip()]
+
+                if len(cells) > col_map["medicine"]:
+                    m_name = cells[col_map["medicine"]]
+                    if len(m_name) < 2 or m_name.startswith("---") or m_name.startswith("==="):
+                        continue
+                    m_str = cells[col_map["strength"]] if "strength" in col_map and len(cells) > col_map["strength"] else ""
+                    m_dosage = cells[col_map["dosage"]] if "dosage" in col_map and len(cells) > col_map["dosage"] else ""
+                    m_dur = cells[col_map["duration"]] if "duration" in col_map and len(cells) > col_map["duration"] else ""
+                    m_qty = cells[col_map["quantity"]] if "quantity" in col_map and len(cells) > col_map["quantity"] else ""
+
+                    m_freq = ""
+                    m_inst = ""
+                    freq_m = re.search(r"\b(once daily|twice daily|three times daily|thrice daily|as needed|as directed|before breakfast|after food|before food|with meals|OD|BD|TDS|QID|sos|prn|daily)\b", m_dosage, re.I)
+                    if freq_m:
+                        m_freq = freq_m.group(1).strip()
+                        m_inst = m_dosage
+                    elif m_dosage:
+                        m_inst = m_dosage
+
+                    display_qty = m_qty or m_dosage or "1"
+                    ai_clean = resolve_active_ingredient(m_name)
+
+                    mg = MedicineGroup(
+                        medicine_name=GroupedField(value=m_name, confidence=0.98, requires_human_review=False, raw_entity="MEDICINE_NAME"),
+                        generic_name=GroupedField(value=ai_clean, confidence=0.95, requires_human_review=False, raw_entity="GENERIC_NAME"),
+                        active_ingredient=GroupedField(value=ai_clean, confidence=0.95, requires_human_review=False, raw_entity="ACTIVE_INGREDIENT"),
+                        strength=GroupedField(value=m_str, confidence=0.95, requires_human_review=False, raw_entity="STRENGTH") if m_str else None,
+                        dosage_quantity=GroupedField(value=display_qty, confidence=0.95, requires_human_review=False, raw_entity="QUANTITY") if display_qty else None,
+                        route=GroupedField(value="Oral", confidence=0.90, requires_human_review=False, raw_entity="ROUTE"),
+                        frequency=GroupedField(value=m_freq, confidence=0.92, requires_human_review=False, raw_entity="FREQUENCY") if m_freq else None,
+                        duration=GroupedField(value=m_dur, confidence=0.92, requires_human_review=False, raw_entity="DURATION") if m_dur else None,
+                        instructions=GroupedField(value=m_inst, confidence=0.90, requires_human_review=False, raw_entity="INSTRUCTIONS") if m_inst else None,
+                    )
+                    individual_medicines.append(mg)
+
+        # Strategy 2: Tabular prescription rows without header (lines with 3+ cells starting with known medicine)
+        if not individual_medicines:
+            for line in lines:
+                if any(term in line.lower() for term in ("subtotal", "grand total", "total:", "doctor:", "patient:", "encounter:", "hospital:", "expected", "diagnosis:", "date:", "age:")):
+                    continue
+                if "\t" in line:
+                    cells = [c.strip() for c in line.split("\t") if c.strip()]
+                elif "|" in line:
+                    cells = [c.strip() for c in line.split("|") if c.strip()]
+                else:
+                    cells = [c.strip() for c in re.split(r" {2,}", line) if c.strip()]
+
+                if len(cells) >= 3:
+                    first_cell = cells[0]
+                    is_med = any(km.lower() in first_cell.lower() for km in KNOWN_MED_NAMES) or bool(re.match(r"^(?:Tab\.?|Cap\.?|Syp\.?|Inj\.?|Sachet)\s+[A-Za-z]+", first_cell, re.I))
+                    if is_med:
+                        m_name = first_cell
+                        m_str = cells[1] if len(cells) > 1 else ""
+                        m_dosage = cells[2] if len(cells) > 2 else ""
+                        m_dur = cells[3] if len(cells) > 3 else ""
+                        m_qty = cells[4] if len(cells) > 4 else ""
+
+                        m_freq = ""
+                        m_inst = ""
+                        freq_m = re.search(r"\b(once daily|twice daily|three times daily|thrice daily|as needed|as directed|before breakfast|after food|before food|with meals|OD|BD|TDS|QID|sos|prn|daily)\b", m_dosage, re.I)
+                        if freq_m:
+                            m_freq = freq_m.group(1).strip()
+                            m_inst = m_dosage
+                        elif m_dosage:
+                            m_inst = m_dosage
+
+                        display_qty = m_qty or m_dosage or "1"
+                        ai_clean = resolve_active_ingredient(m_name)
+
+                        mg = MedicineGroup(
+                            medicine_name=GroupedField(value=m_name, confidence=0.98, requires_human_review=False, raw_entity="MEDICINE_NAME"),
+                            generic_name=GroupedField(value=ai_clean, confidence=0.95, requires_human_review=False, raw_entity="GENERIC_NAME"),
+                            active_ingredient=GroupedField(value=ai_clean, confidence=0.95, requires_human_review=False, raw_entity="ACTIVE_INGREDIENT"),
+                            strength=GroupedField(value=m_str, confidence=0.95, requires_human_review=False, raw_entity="STRENGTH") if m_str else None,
+                            dosage_quantity=GroupedField(value=display_qty, confidence=0.95, requires_human_review=False, raw_entity="QUANTITY") if display_qty else None,
+                            route=GroupedField(value="Oral", confidence=0.90, requires_human_review=False, raw_entity="ROUTE"),
+                            frequency=GroupedField(value=m_freq, confidence=0.92, requires_human_review=False, raw_entity="FREQUENCY") if m_freq else None,
+                            duration=GroupedField(value=m_dur, confidence=0.92, requires_human_review=False, raw_entity="DURATION") if m_dur else None,
+                            instructions=GroupedField(value=m_inst, confidence=0.90, requires_human_review=False, raw_entity="INSTRUCTIONS") if m_inst else None,
+                        )
+                        individual_medicines.append(mg)
+
+        # Strategy 3: Check numbered line items (e.g. 1. Paracetamol ...)
+        if not individual_medicines:
+            num_matches = list(re.finditer(r"^\s*(\d+)[\.\)]\s+(.+?)(?=(?:^\s*\d+[\.\)]|\Z))", text, re.M | re.S))
+            for nm in num_matches:
+                item_text = nm.group(2).strip()
+                first_line = item_text.splitlines()[0]
+                inst_m = re.search(r"Instructions?[:\s]*(.+)", item_text, re.I)
+                inst_val = inst_m.group(1).strip() if inst_m else ""
+
+                name_m = re.search(r"^(?:Tab\.?|Cap\.?|Syp\.?|Inj\.?)?\s*([A-Za-z0-9\s]+?)(?:\s+\d+\s*(?:mg|ml|mcg|g)|(?:\s*-\s*)|\n|$)", first_line, re.I)
+                m_name = name_m.group(1).strip() if name_m else first_line[:30].strip()
+
+                if any(kw in m_name.lower() for kw in ("subtotal", "grand total", "total", "invoice", "doctor", "patient", "encounter")):
+                    continue
+
+                str_m = re.search(r"\b(\d+(?:\.\d+)?\s*(?:mg/ml|mcg/ml|w/v|g/l|mg|mcg|g|ml|%))\b", item_text, re.I)
+                m_str = str_m.group(1).strip() if str_m else ""
+
+                qty_m = re.search(r"\b(\d+\s*(?:tablets?|capsules?|sachets?|bottles?|vials?|strips?|units?))\b", item_text, re.I)
+                if not qty_m:
+                    qty_m = re.search(r"\bQty[:\s]*(\d+)\b", item_text, re.I)
+                m_qty = qty_m.group(1).strip() if qty_m else ""
+
+                up_m = re.search(r"Unit\s*Price[:\s]*(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d{2})?)", item_text, re.I)
+                m_up = f"₹{up_m.group(1).strip()}" if up_m else ""
+
+                la_m = re.search(r"Line\s*Amount[:\s]*(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d{2})?)", item_text, re.I)
+                m_la = f"₹{la_m.group(1).strip()}" if la_m else ""
+
+                freq_m = re.search(r"\b(once daily|twice daily|three times daily|thrice daily|as needed|OD|BD|TDS|QID|sos|prn|daily)\b", inst_val or item_text, re.I)
+                m_freq = freq_m.group(1).strip().capitalize() if freq_m else ""
+
+                dur_m = re.search(r"\b(\d+\s*(?:days?|weeks?|months?))\b", inst_val or item_text, re.I)
+                m_dur = dur_m.group(1).strip() if dur_m else ""
+
+                ai_clean = resolve_active_ingredient(m_name)
+                mg = MedicineGroup(
+                    medicine_name=GroupedField(value=m_name, confidence=0.95, requires_human_review=False, raw_entity="MEDICINE_NAME"),
+                    generic_name=GroupedField(value=ai_clean, confidence=0.95, requires_human_review=False, raw_entity="GENERIC_NAME"),
+                    active_ingredient=GroupedField(value=ai_clean, confidence=0.95, requires_human_review=False, raw_entity="ACTIVE_INGREDIENT"),
+                    strength=GroupedField(value=m_str, confidence=0.92, requires_human_review=False, raw_entity="STRENGTH") if m_str else None,
+                    dosage_quantity=GroupedField(value=m_qty, confidence=0.92, requires_human_review=False, raw_entity="QUANTITY") if m_qty else None,
+                    route=GroupedField(value="Oral", confidence=0.85, requires_human_review=False, raw_entity="ROUTE"),
+                    frequency=GroupedField(value=m_freq, confidence=0.90, requires_human_review=False, raw_entity="FREQUENCY") if m_freq else None,
+                    duration=GroupedField(value=m_dur, confidence=0.90, requires_human_review=False, raw_entity="DURATION") if m_dur else None,
+                    instructions=GroupedField(value=inst_val, confidence=0.88, requires_human_review=False, raw_entity="INSTRUCTIONS") if inst_val else None,
+                    unit_price=GroupedField(value=m_up, confidence=0.95, requires_human_review=False, raw_entity="UNIT_PRICE") if m_up else None,
+                    line_amount=GroupedField(value=m_la, confidence=0.95, requires_human_review=False, raw_entity="LINE_AMOUNT") if m_la else None,
+                )
+                individual_medicines.append(mg)
+
+        # Strategy 4: Check bulleted items (e.g. - Paracetamol: 8 × ₹5 = ₹40)
+        if not individual_medicines:
+            bullet_re = re.compile(r"^[-*•]\s*([A-Za-z0-9\s]+?)[:\-]\s*(?:(\d+)\s*[x×]\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)\s*=\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)|(.+))", re.M)
+            for bm in bullet_re.finditer(text):
+                b_name = bm.group(1).strip()
+                if any(term in b_name.lower() for term in ("total", "subtotal", "tax", "discount")):
+                    continue
+                b_qty = bm.group(2) or ""
+                b_up = f"₹{bm.group(3)}" if bm.group(3) else ""
+                b_la = f"₹{bm.group(4)}" if bm.group(4) else ""
+                ai_clean = resolve_active_ingredient(b_name)
+                mg = MedicineGroup(
+                    medicine_name=GroupedField(value=b_name, confidence=0.92, requires_human_review=False, raw_entity="MEDICINE_NAME"),
+                    generic_name=GroupedField(value=ai_clean, confidence=0.92, requires_human_review=False, raw_entity="GENERIC_NAME"),
+                    active_ingredient=GroupedField(value=ai_clean, confidence=0.92, requires_human_review=False, raw_entity="ACTIVE_INGREDIENT"),
+                    dosage_quantity=GroupedField(value=b_qty, confidence=0.90, requires_human_review=False, raw_entity="QUANTITY") if b_qty else None,
+                    route=GroupedField(value="Oral", confidence=0.85, requires_human_review=False, raw_entity="ROUTE"),
+                    unit_price=GroupedField(value=b_up, confidence=0.95, requires_human_review=False, raw_entity="UNIT_PRICE") if b_up else None,
+                    line_amount=GroupedField(value=b_la, confidence=0.95, requires_human_review=False, raw_entity="LINE_AMOUNT") if b_la else None,
+                )
+                individual_medicines.append(mg)
+
+        # Strategy 5: Multiple distinct drug entities from NER
+        if not individual_medicines and len(drug_entities) > 1:
+            for de in drug_entities:
+                d_name = de.text.strip()
+                ai_clean = resolve_active_ingredient(d_name)
+                str_match_d = re.search(re.escape(d_name) + r"[\s\w\-]*?(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml))\b", text, re.I)
+                d_str = str_match_d.group(1).strip() if str_match_d else None
+                mg = MedicineGroup(
+                    medicine_name=GroupedField(value=d_name, confidence=de.confidence, requires_human_review=de.requires_human_review, raw_entity=de.entity),
+                    generic_name=GroupedField(value=ai_clean, confidence=de.confidence, requires_human_review=False, raw_entity="GENERIC_NAME"),
+                    active_ingredient=GroupedField(value=ai_clean, confidence=de.confidence, requires_human_review=False, raw_entity="ACTIVE_INGREDIENT"),
+                    strength=GroupedField(value=d_str, confidence=0.90, requires_human_review=False, raw_entity="STRENGTH") if d_str else None,
+                    route=GroupedField(value="Oral", confidence=0.85, requires_human_review=False, raw_entity="ROUTE"),
+                )
+                individual_medicines.append(mg)
+
+        # Cross-enrich unit price, line amount, and quantity from bullet pricing lines
+        for mg in individual_medicines:
+            m_name = mg.medicine_name.value if mg.medicine_name else ""
+            ai_name = mg.active_ingredient.value if mg.active_ingredient else ""
+            price_m = None
+            if m_name:
+                price_m = re.search(r"[-*•]?\s*" + re.escape(m_name) + r"[:\s]+(\d+)\s*[x×]\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)\s*=\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)", text, re.I)
+            if not price_m and ai_name:
+                price_m = re.search(r"[-*•]?\s*" + re.escape(ai_name) + r"[:\s]+(\d+)\s*[x×]\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)\s*=\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)", text, re.I)
+            if price_m:
+                if not mg.dosage_quantity or mg.dosage_quantity.value in ("1", "1 Tab"):
+                    mg.dosage_quantity = GroupedField(value=price_m.group(1), confidence=0.95, requires_human_review=False, raw_entity="QUANTITY")
+                if not mg.unit_price:
+                    mg.unit_price = GroupedField(value=f"₹{price_m.group(2)}", confidence=0.95, requires_human_review=False, raw_entity="UNIT_PRICE")
+                if not mg.line_amount:
+                    mg.line_amount = GroupedField(value=f"₹{price_m.group(3)}", confidence=0.95, requires_human_review=False, raw_entity="LINE_AMOUNT")
+
+        if individual_medicines:
+            medicine_group = individual_medicines[0]
         else:
             med_ent = brand_ent or gen_ent or ai_ent
             if med_ent and med_ent.text.strip().lower() not in NON_DRUG_MED_TERMS:
@@ -788,81 +1017,87 @@ class BioBERTNERService:
                     requires_human_review=ai_ent.requires_human_review,
                     raw_entity="ACTIVE_INGREDIENT"
                 )
+            elif medicine_group.medicine_name and medicine_group.medicine_name.value:
+                res_ai = resolve_active_ingredient(medicine_group.medicine_name.value)
+                if res_ai:
+                    medicine_group.active_ingredient = GroupedField(
+                        value=res_ai,
+                        confidence=0.90,
+                        requires_human_review=False,
+                        raw_entity="ACTIVE_INGREDIENT"
+                    )
 
-        # Strength - strictly prevent HbA1c / lab percentages from contaminating drug strength
-        all_strengths = re.findall(r"\b(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|mg/ml|mcg/ml|g/l|w/v))\b", text, re.I)
-        if len(all_strengths) > 1 and len(drug_entities) > 1:
-            medicine_group.strength = GroupedField(
-                value=", ".join(dict.fromkeys(s.strip() for s in all_strengths)),
-                confidence=0.90,
-                requires_human_review=False,
-                raw_entity="STRENGTH"
-            )
-        elif str_ent and not ("%" in str_ent.text and "hba1c" in text.lower()):
-            medicine_group.strength = GroupedField(
-                value=str_ent.text.strip(),
-                confidence=str_ent.confidence,
-                requires_human_review=str_ent.requires_human_review,
-                raw_entity="STRENGTH"
-            )
-        else:
-            # Fallback regex explicitly excluding % unless attached to IV fluid (e.g. 0.9% Normal Saline)
-            str_match = re.search(r"(\d+(?:\.\d+)?\s*(?:mg/ml|w/v|mcg/ml|g/l|mg|mcg|g)\b)", text, re.I)
-            if not str_match and ("normal saline" in text.lower() or "sodium chloride" in text.lower()):
-                str_match = re.search(r"(0\.\d+%\s*(?:w/v|nacl)?)", text, re.I)
-            if str_match:
+        # Strength, Dosage, Route, Frequency & Instructions for single medicine
+        if not individual_medicines:
+            all_strengths = re.findall(r"\b(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|mg/ml|mcg/ml|g/l|w/v))\b", text, re.I)
+            if len(all_strengths) > 1 and len(drug_entities) > 1:
                 medicine_group.strength = GroupedField(
-                    value=str_match.group(1).strip(),
-                    confidence=0.85,
+                    value=", ".join(dict.fromkeys(s.strip() for s in all_strengths)),
+                    confidence=0.90,
                     requires_human_review=False,
                     raw_entity="STRENGTH"
                 )
+            elif str_ent and not ("%" in str_ent.text and "hba1c" in text.lower()):
+                medicine_group.strength = GroupedField(
+                    value=str_ent.text.strip(),
+                    confidence=str_ent.confidence,
+                    requires_human_review=str_ent.requires_human_review,
+                    raw_entity="STRENGTH"
+                )
+            else:
+                str_match = re.search(r"(\d+(?:\.\d+)?\s*(?:mg/ml|w/v|mcg/ml|g/l|mg|mcg|g)\b)", text, re.I)
+                if not str_match and ("normal saline" in text.lower() or "sodium chloride" in text.lower()):
+                    str_match = re.search(r"(0\.\d+%\s*(?:w/v|nacl)?)", text, re.I)
+                if str_match:
+                    medicine_group.strength = GroupedField(
+                        value=str_match.group(1).strip(),
+                        confidence=0.85,
+                        requires_human_review=False,
+                        raw_entity="STRENGTH"
+                    )
 
-        # Dosage / Quantity (strictly reject stay durations like '4 days')
-        if dose_ent:
-            medicine_group.dosage_quantity = GroupedField(
-                value=dose_ent.text.strip(),
-                confidence=dose_ent.confidence,
-                requires_human_review=dose_ent.requires_human_review,
-                raw_entity=dose_ent.entity
-            )
+            if dose_ent:
+                medicine_group.dosage_quantity = GroupedField(
+                    value=dose_ent.text.strip(),
+                    confidence=dose_ent.confidence,
+                    requires_human_review=dose_ent.requires_human_review,
+                    raw_entity=dose_ent.entity
+                )
 
-        # Route
-        route_match = re.search(r"\b(IV|IM|SC|oral|PO|topical|sublingual|intravenous|intra-arterial|inhalation)\b", text, re.I)
-        if route_match:
-            r_str = route_match.group(1).upper() if len(route_match.group(1)) <= 3 else route_match.group(1).capitalize()
-            medicine_group.route = GroupedField(
-                value=r_str,
-                confidence=0.85,
-                requires_human_review=False,
-                raw_entity="ROUTE"
-            )
+            route_match = re.search(r"\b(IV|IM|SC|oral|PO|topical|sublingual|intravenous|intra-arterial|inhalation)\b", text, re.I)
+            if route_match:
+                r_str = route_match.group(1).upper() if len(route_match.group(1)) <= 3 else route_match.group(1).capitalize()
+                medicine_group.route = GroupedField(
+                    value=r_str,
+                    confidence=0.85,
+                    requires_human_review=False,
+                    raw_entity="ROUTE"
+                )
 
-        # Frequency / Duration / Instructions
-        freq_match = re.search(r"\b(once daily|twice daily|thrice daily|three times daily|OD|BD|TDS|QID|every \d+ hours|daily|at bedtime|PRN)\b", text, re.I)
-        if freq_match:
-            medicine_group.frequency = GroupedField(
-                value=freq_match.group(1).strip(),
-                confidence=0.88,
-                requires_human_review=False,
-                raw_entity="FREQUENCY"
-            )
-        dur_match = re.search(r"\b(?:for\s+)?(\d+\s*(?:days?|weeks?|months?))\b", text, re.I)
-        if dur_match:
-            medicine_group.duration = GroupedField(
-                value=dur_match.group(1).strip(),
-                confidence=0.85,
-                requires_human_review=False,
-                raw_entity="DURATION"
-            )
-        inst_match = re.search(r"\b(after food|before food|with water|with meals|empty stomach|as directed)\b", text, re.I)
-        if inst_match:
-            medicine_group.instructions = GroupedField(
-                value=inst_match.group(1).strip(),
-                confidence=0.85,
-                requires_human_review=False,
-                raw_entity="INSTRUCTIONS"
-            )
+            freq_match = re.search(r"\b(once daily|twice daily|thrice daily|three times daily|OD|BD|TDS|QID|every \d+ hours|daily|at bedtime|PRN)\b", text, re.I)
+            if freq_match:
+                medicine_group.frequency = GroupedField(
+                    value=freq_match.group(1).strip(),
+                    confidence=0.88,
+                    requires_human_review=False,
+                    raw_entity="FREQUENCY"
+                )
+            dur_match = re.search(r"\b(?:for\s+)?(\d+\s*(?:days?|weeks?|months?))\b", text, re.I)
+            if dur_match:
+                medicine_group.duration = GroupedField(
+                    value=dur_match.group(1).strip(),
+                    confidence=0.85,
+                    requires_human_review=False,
+                    raw_entity="DURATION"
+                )
+            inst_match = re.search(r"\b(after food|before food|with water|with meals|empty stomach|as directed)\b", text, re.I)
+            if inst_match:
+                medicine_group.instructions = GroupedField(
+                    value=inst_match.group(1).strip(),
+                    confidence=0.85,
+                    requires_human_review=False,
+                    raw_entity="INSTRUCTIONS"
+                )
 
         # 3. Clinical Information
         enc_header_m = re.search(r"\bEncounter\s*[:#]\s*([A-Za-z\s]+?)(?:\n|\r|,|\||$)", text, re.I)
@@ -1076,21 +1311,21 @@ class BioBERTNERService:
             billing_group.currency = detected_curr
             curr_sym = "₹" if detected_curr == "INR" else ("$" if detected_curr == "USD" else ("€" if detected_curr == "EUR" else "£"))
 
-            if rec.stated_total is not None and not is_rx_or_op:
+            if rec.stated_total is not None and rec.stated_total > 0:
                 billing_group.billed_amount = GroupedField(
                     value=f"{curr_sym}{rec.stated_total:,.2f}".replace(".00", ""),
                     confidence=0.98,
                     requires_human_review=False,
                     raw_entity="STATED_TOTAL"
                 )
-            if rec.itemized_sum > 0 and not is_rx_or_op:
+            if rec.itemized_sum > 0:
                 billing_group.subtotal = GroupedField(
                     value=f"{curr_sym}{rec.itemized_sum:,.2f}".replace(".00", ""),
                     confidence=0.98,
                     requires_human_review=False,
                     raw_entity="ITEMIZED_TOTAL"
                 )
-            if rec.patient_payable is not None and not is_rx_or_op:
+            if rec.patient_payable is not None and rec.patient_payable > 0:
                 billing_group.patient_payable = GroupedField(
                     value=f"{curr_sym}{rec.patient_payable:,.2f}".replace(".00", ""),
                     confidence=0.98,
@@ -1100,11 +1335,37 @@ class BioBERTNERService:
         except Exception as b_err:
             logger.debug(f"Billing reconciliation in NER group_medical_information fallback: {b_err}")
 
-        # Fallback to NER if billing reconciliation didn't set values (bypassed for prescriptions)
+        # Direct Regex Fallback for Grand Total / Subtotal / Billed Amount if not yet captured
+        if not billing_group.billed_amount:
+            gt_m = re.search(r"\b(?:Grand\s*Total|Total\s*Amount|Billed\s*Amount|Total\s*Payable|Invoice\s*Total|Total)\s*[:#]?\s*(?:₹|Rs\.?|INR)?\s*([0-9,]+(?:\.[0-9]{2})?)", text, re.I)
+            if gt_m:
+                val_clean = gt_m.group(1).replace(",", "")
+                curr_char = "₹" if ("₹" in text or "INR" in text or "Rs" in text) else "$"
+                billing_group.billed_amount = GroupedField(
+                    value=f"{curr_char}{val_clean}".replace(".00", ""),
+                    confidence=0.98,
+                    requires_human_review=False,
+                    raw_entity="GRAND_TOTAL"
+                )
+                billing_group.currency = "INR" if curr_char == "₹" else "USD"
+
+        if not billing_group.subtotal:
+            sub_m = re.search(r"\b(?:Sub\s*Total|Subtotal)\s*[:#]?\s*(?:₹|Rs\.?|INR)?\s*([0-9,]+(?:\.[0-9]{2})?)", text, re.I)
+            if sub_m:
+                val_clean = sub_m.group(1).replace(",", "")
+                curr_char = "₹" if ("₹" in text or "INR" in text or "Rs" in text) else "$"
+                billing_group.subtotal = GroupedField(
+                    value=f"{curr_char}{val_clean}".replace(".00", ""),
+                    confidence=0.98,
+                    requires_human_review=False,
+                    raw_entity="SUBTOTAL"
+                )
+
+        # Fallback to NER if billing reconciliation didn't set values
         clm_amt_ent = next((e for e in entities if e.entity == "CLAIM_AMOUNT"), None)
         inv_tot_ent = next((e for e in entities if e.entity == "INVOICE_TOTAL"), None)
 
-        if not billing_group.billed_amount and not is_rx_or_op:
+        if not billing_group.billed_amount:
             amt_ent = inv_tot_ent or clm_amt_ent
             if amt_ent:
                 billing_group.billed_amount = GroupedField(
@@ -1202,6 +1463,7 @@ class BioBERTNERService:
         return GroupedMedicalInformation(
             hospital=hospital_group,
             medicine=medicine_group,
+            medicines=individual_medicines if individual_medicines else [medicine_group],
             clinical=clinical_group,
             billing=billing_group,
             document_type=doc_type

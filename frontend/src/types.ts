@@ -559,6 +559,8 @@ export interface MedicineGroup {
   frequency?: GroupedField | null
   duration?: GroupedField | null
   instructions?: GroupedField | null
+  unit_price?: GroupedField | null
+  line_amount?: GroupedField | null
 }
 
 export interface ClinicalGroup {
@@ -593,6 +595,7 @@ export interface BillingGroup {
 export interface GroupedMedicalInformation {
   hospital: HospitalGroup
   medicine: MedicineGroup
+  medicines?: MedicineGroup[] | null
   clinical: ClinicalGroup
   billing: BillingGroup
   document_type?: string | null

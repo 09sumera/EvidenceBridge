@@ -9,8 +9,6 @@ import Landing from './pages/Landing'
 import Home from './pages/Home'
 import Claims from './pages/Claims'
 import ClaimDetail from './pages/ClaimDetail'
-import TrustDensity from './pages/TrustDensity'
-import Evaluation from './pages/Evaluation'
 import CommunityStories from './pages/CommunityStories'
 import Insights from './pages/Insights'
 import HospitalFinder from './pages/HospitalFinder'
@@ -28,30 +26,21 @@ function RootRoute() {
 }
 
 /**
- * Route guard strictly ensuring only authenticated HOSPITAL_MANAGEMENT
- * can access the single Hospital Staff & SOS Management page.
+ * Route guard allowing authenticated users (or read-only preview) to access Hospital Staff & SOS Management page.
  */
 function HospitalManagementGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isHospitalManagement } = useAuth()
-  if (!isAuthenticated) {
+  const { isAuthenticated } = useAuth()
+  const isReadOnlyQuery = typeof window !== 'undefined' && window.location.search.includes('mode=read_only')
+  if (!isAuthenticated && !isReadOnlyQuery) {
     return <Navigate to="/" replace />
-  }
-  if (!isHospitalManagement) {
-    // Strictly prevent patient accounts from accessing hospital management desk
-    return <Navigate to="/hospitals" replace />
   }
   return <>{children}</>
 }
 
 /**
- * Route guard strictly ensuring HOSPITAL_MANAGEMENT cannot access patient
- * workflows (Audit Claim, Claims Explorer, Insights, Patient Directory, etc.)
+ * Route guard allowing users to access patient and hospital directory workflows.
  */
 function PatientWorkflowGuard({ children }: { children: React.ReactNode }) {
-  const { isHospitalManagement } = useAuth()
-  if (isHospitalManagement) {
-    return <Navigate to="/hospital/management" replace />
-  }
   return <>{children}</>
 }
 
@@ -111,14 +100,7 @@ export default function App() {
                       </PatientWorkflowGuard>
                     }
                   />
-                  <Route
-                    path="/trust-density"
-                    element={
-                      <PatientWorkflowGuard>
-                        <TrustDensity />
-                      </PatientWorkflowGuard>
-                    }
-                  />
+                  <Route path="/trust-density" element={<Navigate to="/audit" replace />} />
                   <Route
                     path="/insights"
                     element={
@@ -137,14 +119,7 @@ export default function App() {
                     }
                   />
                   <Route path="/finder" element={<Navigate to="/hospitals" replace />} />
-                  <Route
-                    path="/evaluation"
-                    element={
-                      <PatientWorkflowGuard>
-                        <Evaluation />
-                      </PatientWorkflowGuard>
-                    }
-                  />
+                  <Route path="/evaluation" element={<Navigate to="/audit" replace />} />
                   <Route
                     path="/community"
                     element={

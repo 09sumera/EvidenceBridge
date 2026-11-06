@@ -179,7 +179,7 @@ export default function Landing() {
               <p className={`text-base sm:text-lg leading-relaxed max-w-2xl ${
                 isDark ? 'text-neutral-300' : 'text-neutral-700'
               }`}>
-                Cross-reference hospital bills, clinical notes, and prescriptions against authoritative medical guidelines (WHO, ICMR) and public pricing benchmarks (CGHS, PM-JAY). Every decision is backed by an inspectable 7-stage audit trail — no black boxes, no arbitrary denials.
+                Cross-reference hospital bills, clinical notes, and prescriptions against authoritative medical guidelines (WHO, ICMR) and public pricing benchmarks (CGHS, PM-JAY). Every decision is backed by an inspectable 9-stage audit trail — no black boxes, no arbitrary denials.
               </p>
 
               {/* CTA Group */}
@@ -209,26 +209,6 @@ export default function Landing() {
                 >
                   <span>Browse Audited Claims</span>
                 </button>
-              </div>
-
-              {/* Trust Markers */}
-              <div className="pt-4 border-t border-slate-200/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-slate-600">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-emerald-600 font-bold text-sm">✓</span>
-                  <span>100% Local &amp; Private</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-emerald-600 font-bold text-sm">✓</span>
-                  <span>CGHS &amp; Indian Benchmarks</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-emerald-600 font-bold text-sm">✓</span>
-                  <span>SHA-256 Tamper Proof</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-emerald-600 font-bold text-sm">✓</span>
-                  <span>Deterministic Safety</span>
-                </div>
               </div>
             </div>
 
@@ -386,7 +366,7 @@ export default function Landing() {
                   onClick={() => handleGetStarted('patient')}
                   className="px-5 py-2.5 text-xs font-black bg-orange-600 hover:bg-orange-700 text-white rounded-xl border border-neutral-900 shadow-adjudo-sm transition-all whitespace-nowrap cursor-pointer"
                 >
-                  Inspect Full 7-Stage Audit Graph &rarr;
+                  Inspect Full 9-Stage Audit Graph &rarr;
                 </button>
               </div>
             </div>
@@ -400,9 +380,6 @@ export default function Landing() {
       }`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-12">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-neutral-900 bg-cream-200 dark:bg-neutral-900 text-neutral-950 dark:text-orange-400 text-xs font-black shadow-adjudo-sm mb-3">
-              <span>🛡️ Evidence &amp; Pricing Foundations</span>
-            </div>
             <h2 className="text-xs font-black uppercase tracking-widest text-orange-600 dark:text-orange-400 mb-2">
               Why Healthcare Auditing Needs Transparency
             </h2>
@@ -500,19 +477,11 @@ export default function Landing() {
                   </div>
                 </div>
               </div>
-
-              <p className="mt-3 text-center sm:text-left text-xs text-neutral-600 dark:text-neutral-400 font-medium italic">
-                Upload or capture any prescription photo to decode handwritten medicine names, instructions, and fair pricing.
-              </p>
             </div>
 
             {/* Right Column: Prescription Features & Benefits */}
             <div className="lg:col-span-6 space-y-6">
               <div>
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-cream-200 dark:bg-neutral-900 text-neutral-950 dark:text-orange-400 border border-neutral-900 shadow-adjudo-sm mb-3">
-                  <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-                  Prescription &amp; Medication Intelligence
-                </span>
                 <h2 className={`text-2xl sm:text-4xl font-black tracking-tight leading-tight ${
                   isDark ? 'text-white' : 'text-neutral-950'
                 }`}>
@@ -861,7 +830,7 @@ export default function Landing() {
               <div className="w-8 h-8 rounded-xl font-black text-sm flex items-center justify-center flex-shrink-0 bg-emerald-600 text-white border border-neutral-900 shadow-adjudo-sm mb-3">
                 3
               </div>
-              <h3 className={`text-base font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>Inspect the 7-Stage Audit Graph</h3>
+              <h3 className={`text-base font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>Inspect the 9-Stage Audit Graph</h3>
               <p className={`text-xs mt-2 leading-relaxed font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
                 Review the step-by-step decision trail: extraction, provenance, evidence retrieval, cost audit, clinical judgment, safety gates, and final action.
               </p>
@@ -998,11 +967,6 @@ export default function Landing() {
                   </Link>
                 </li>
                 <li>
-                  <Link to="/trust-density" className="hover:text-white transition-colors">
-                    Regional Trust Scores
-                  </Link>
-                </li>
-                <li>
                   <Link to="/insights" className="hover:text-white transition-colors">
                     Audit Insights &amp; Analytics
                   </Link>
@@ -1019,11 +983,6 @@ export default function Landing() {
                 <li>
                   <Link to="/community" className="hover:text-white transition-colors">
                     Patient Recovery Stories
-                  </Link>
-                </li>
-                <li>
-                  <Link to="/evaluation" className="hover:text-white transition-colors">
-                    7-Stage Audit Benchmark Runs
                   </Link>
                 </li>
                 <li>

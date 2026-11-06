@@ -130,6 +130,8 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [activeClaim, setActiveClaim] = useState<ActiveClaimContext | null>(null)
   const lastExecutedCommandRef = useRef<{ text: string; time: number }>({ text: '', time: 0 })
+  const recognitionRef = useRef<any>(null)
+  const isListeningRef = useRef(false)
 
   const isPatient = isAuthenticated && !isHospitalManagement && user?.portal !== 'hospital_management'
 
@@ -152,15 +154,34 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   const setLanguage = (lang: 'en' | 'kn') => {
     setLanguageState(lang)
+    languageRef.current = lang
     try {
       localStorage.setItem(STORAGE_LANG_KEY, lang)
     } catch {}
     setError(null)
+
+    // Dynamically update speech recognition if currently running
+    if (isListeningRef.current && recognitionRef.current) {
+      try {
+        recognitionRef.current.abort()
+      } catch {}
+      setTimeout(() => {
+        if (isListeningRef.current) {
+          startListening()
+        }
+      }, 150)
+    }
   }
 
   // Cleanup on unmount or patient logout
   useEffect(() => {
     return () => {
+      isListeningRef.current = false
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort()
+        } catch {}
+      }
       elevenLabsVoice.stopSession()
     }
   }, [])
@@ -168,6 +189,12 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   // If user signs out or switches to hospital management, immediately stop voice
   useEffect(() => {
     if (!isPatient) {
+      isListeningRef.current = false
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort()
+        } catch {}
+      }
       elevenLabsVoice.stopSession()
       setStatus('idle')
       setIsOpen(false)
@@ -178,7 +205,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
    * Stop active speech output
    */
   const stopSpeaking = useCallback(() => {
-    elevenLabsVoice.clearAudioQueue()
+    elevenLabsVoice.stopAudioPlayback()
     setStatus((prev) => (prev === 'speaking' ? 'idle' : prev))
   }, [])
 
@@ -211,16 +238,15 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       if (elevenLabsVoice.isActive()) {
         elevenLabsVoice.sendUserMessage(cleanText)
       } else {
-        // Fallback: If ElevenLabs live session is not open, simulate speech completion
-        const estimatedDurationMs = Math.min(8000, Math.max(1500, cleanText.length * 55))
-        setTimeout(() => {
+        // Speak using ElevenLabs REST TTS API (supports API Key sk_...) with browser SpeechSynthesis fallback
+        elevenLabsVoice.speakText(cleanText, targetLang).then(() => {
           setStatus((prev) => {
             if (prev === 'speaking') {
               return isContinuousRef.current ? 'listening' : 'idle'
             }
             return prev
           })
-        }, estimatedDurationMs)
+        })
       }
     },
     [stopSpeaking]
@@ -477,106 +503,253 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Stop speech playback
-      if (matchesAny('stop', 'cancel', 'silence', 'ನಿಲ್ಲು', 'ನಿಲ್ಲಿಸಿ', 'ಸಾಕು')) {
+      if (matchesAny('stop', 'cancel', 'silence', 'pause', 'quiet', 'ನಿಲ್ಲು', 'ನಿಲ್ಲಿಸಿ', 'ಸಾಕು')) {
         stopSpeaking()
         return
       }
 
-      // COMMAND: "Open claims" / "Open claim audit" / "Show my claims"
+      // COMMAND: "Hospitals" (direct to hospitals, find hospitals, etc.)
       if (
         matchesAny(
-          'open claims',
-          'open claim audit',
-          'show my claims',
-          'show claims',
-          'claims audit',
-          'claims',
-          'open audit',
-          'claim audit',
-          'ಕ್ಲೈಮ್ ತೆರೆಯಿರಿ',
-          'ಆಡಿಟ್ ತೆರೆಯಿರಿ',
-          'ಕ್ಲೈಮ್‌ಗಳು',
-          'ಕ್ಲೈಮ್ಸ್'
-        )
-      ) {
-        navigate('/audit')
-        const navMsg = currentLang === 'kn' ? 'ಕ್ಲೈಮ್ ಆಡಿಟ್ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Claims Audit.'
-        speak(navMsg)
-        return
-      }
-
-      // COMMAND: "Open hospitals" / "Show hospitals" / "Find hospitals"
-      if (
-        matchesAny(
+          'direct to hospital',
+          'direct to hospitals',
+          'redirect to hospital',
+          'redirect to hospitals',
+          'navigate to hospital',
+          'navigate to hospitals',
+          'go to hospital',
+          'go to hospitals',
+          'take me to hospital',
+          'take me to hospitals',
+          'open hospital',
           'open hospitals',
+          'show hospital',
           'show hospitals',
+          'find hospital',
           'find hospitals',
           'find nearby hospitals',
           'nearby hospitals',
           'hospital finder',
           'hospitals',
           'hospital',
+          'facilities',
+          'doctors',
+          'doctor availability',
+          'aspatre',
+          'aspathre',
+          'hospitalge',
+          'hospital ge',
+          'ಆಸ್ಪತ್ರೆಗೆ ಹೋಗಿ',
+          'ಆಸ್ಪತ್ರೆಗೆ',
+          'ಆಸ್ಪತ್ರೆ ತೋರಿಸಿ',
           'ಆಸ್ಪತ್ರೆ ತೆರೆಯಿರಿ',
           'ಆಸ್ಪತ್ರೆಗಳು',
           'ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ',
-          'ಹತ್ತಿರದ ಆಸ್ಪತ್ರೆಗಳು'
+          'ಹತ್ತಿರದ ಆಸ್ಪತ್ರೆಗಳು',
+          'ಆಸ್ಪತ್ರೆ',
+          'ವೈದ್ಯರು',
+          'ವೈದ್ಯರನ್ನು ಹುಡುಕಿ',
+          'ಡಾಕ್ಟರ್',
+          'ಡಾಕ್ಟರ್ಸ್',
+          'ಹಾಸ್ಪಿಟಲ್',
+          'ಹಾಸ್ಪಿಟಲ್ಸ್',
+          'ಹಾಸ್ಪಿಟಲ್‌ಗೆ ಹೋಗಿ'
         )
       ) {
         navigate('/hospitals')
-        const navMsg = currentLang === 'kn' ? 'ಆಸ್ಪತ್ರೆಗಳ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Hospitals.'
+        const navMsg = currentLang === 'kn' ? 'ಆಸ್ಪತ್ರೆಗಳ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Directing to Hospitals.'
         speak(navMsg)
         return
       }
 
-      // COMMAND: "Open dashboard" / "Patient dashboard"
+      // COMMAND: "Audit Claim" (direct to audit, new audit, etc.)
       if (
         matchesAny(
-          'open dashboard',
-          'dashboard',
-          'patient dashboard',
-          'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್',
-          'ಡ್ಯಾಶ್ ಬೋರ್ಡ್'
+          'direct to audit',
+          'redirect to audit',
+          'navigate to audit',
+          'go to audit',
+          'take me to audit',
+          'open audit',
+          'audit claim',
+          'audit document',
+          'new audit',
+          'check claim',
+          'verify claim',
+          'audit bill',
+          'audit page',
+          'audit',
+          'ಆಡಿಟ್ ಪುಟ',
+          'ಆಡಿಟ್‌ಗೆ ಹೋಗಿ',
+          'ಆಡಿಟ್ ತೆರೆಯಿರಿ',
+          'ಆಡಿಟ್',
+          'ದಾಖಲೆ ಪರಿಶೀಲಿಸಿ',
+          'ಪರಿಶೀಲನೆ',
+          'ತಪಾಸಣೆ',
+          'ಕ್ಲೈಮ್ ಪರಿಶೀಲಿಸಿ'
         )
       ) {
-        navigate('/')
-        const navMsg = currentLang === 'kn' ? 'ರೋಗಿಯ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ತೆರೆಯುತ್ತಿದ್ದೇವೆ.' : 'Opening Patient Dashboard.'
+        navigate('/audit')
+        const navMsg = currentLang === 'kn' ? 'ಕ್ಲೈಮ್ ಆಡಿಟ್ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Directing to Claims Audit.'
         speak(navMsg)
         return
       }
 
-      // COMMAND: "Open insights"
+      // COMMAND: "Claims Explorer" (direct to claims, my claims, etc.)
       if (
         matchesAny(
+          'direct to claim',
+          'direct to claims',
+          'redirect to claim',
+          'redirect to claims',
+          'navigate to claim',
+          'navigate to claims',
+          'go to claim',
+          'go to claims',
+          'take me to claim',
+          'take me to claims',
+          'open claims explorer',
+          'open claims',
+          'open claim',
+          'claims explorer',
+          'claims history',
+          'show claims',
+          'browse claims',
+          'all claims',
+          'my claims',
+          'claims',
+          'claim',
+          'ಕ್ಲೈಮ್‌ಗೆ ಹೋಗಿ',
+          'ಕ್ಲೈಮ್ ತೋರಿಸಿ',
+          'ಕ್ಲೈಮ್ ತೆರೆಯಿರಿ',
+          'ಕ್ಲೈಮ್‌ಗಳು',
+          'ಕ್ಲೈಮ್ಸ್',
+          'ಕ್ಲೈಮ್',
+          'ದಾಖಲೆಗಳು',
+          'ನನ್ನ ಕ್ಲೈಮ್‌ಗಳು'
+        )
+      ) {
+        navigate('/claims')
+        const navMsg = currentLang === 'kn' ? 'ಕ್ಲೈಮ್ಸ್ ಎಕ್ಸ್‌ಪ್ಲೋರರ್ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Directing to Claims Explorer.'
+        speak(navMsg)
+        return
+      }
+
+      // COMMAND: "Insights" (direct to insights, analytics, etc.)
+      if (
+        matchesAny(
+          'direct to insights',
+          'redirect to insights',
+          'navigate to insights',
+          'go to insights',
+          'take me to insights',
           'open insights',
           'show insights',
           'insights',
+          'insight',
           'analytics',
+          'statistics',
+          'charts',
+          'graphs',
+          'ಒಳನೋಟ ಪುಟ',
+          'ಒಳನೋಟಕ್ಕೆ ಹೋಗಿ',
           'ಒಳನೋಟ ತೆರೆಯಿರಿ',
+          'ಒಳನೋಟಗಳು',
+          'ಒಳನೋಟ',
+          'ಇನ್‌ಸೈಟ್ಸ್',
           'ಇನ್ಸೈಟ್ಸ್',
-          'ಒಳನೋಟಗಳು'
+          'ಗಣಾಂಕಗಳು',
+          'ಗಣಾಂಕ',
+          'ಚಾರ್ಟ್ಸ್',
+          'ಚಾರ್ಟ್',
+          'ಗ್ರಾಫ್',
+          'ವಿಶ್ಲೇಷಣೆ'
         )
       ) {
         navigate('/insights')
         const navMsg =
           currentLang === 'kn'
             ? 'ಒಳನೋಟಗಳು ಮತ್ತು ಗಣಾಂಕಗಳ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.'
-            : 'Opening Visual Insights Dashboard.'
+            : 'Directing to Insights.'
+        speak(navMsg)
+        return
+      }
+
+      // COMMAND: "Staff & SOS Management" (direct to staff management)
+      if (
+        matchesAny(
+          'direct to staff management',
+          'direct to staff',
+          'redirect to staff',
+          'redirect to staff management',
+          'navigate to staff management',
+          'go to staff management',
+          'staff and sos management',
+          'staff management',
+          'hospital management',
+          'sos management',
+          'emergency desk',
+          'emergency sos',
+          'sos desk',
+          'open staff management',
+          'ಸಿಬ್ಬಂದಿ ನಿರ್ವಹಣೆ',
+          'ಸಿಬ್ಬಂದಿ ಪುಟ',
+          'ಸಿಬ್ಬಂದಿಗೆ ಹೋಗಿ',
+          'ಸಿಬ್ಬಂದಿ',
+          'ಆಸ್ಪತ್ರೆ ಸಿಬ್ಬಂದಿ',
+          'ತುರ್ತು ವಿಭಾಗ',
+          'ತುರ್ತು ಸೇವೆ',
+          'ತುರ್ತು',
+          'ಎಮರ್ಜೆನ್ಸಿ',
+          'ಎಸ್ಒಎಸ್',
+          'ಎಸ್ ಒ ಎಸ್'
+        )
+      ) {
+        navigate('/hospital/management?mode=read_only')
+        const navMsg =
+          currentLang === 'kn'
+            ? 'ಆಸ್ಪತ್ರೆ ಸಿಬ್ಬಂದಿ ನಿರ್ವಹಣಾ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.'
+            : 'Directing to Staff and SOS Management.'
+        speak(navMsg)
+        return
+      }
+
+      // COMMAND: "Dashboard / Home"
+      if (
+        matchesAny(
+          'direct to home',
+          'direct to dashboard',
+          'redirect to home',
+          'redirect to dashboard',
+          'navigate to home',
+          'navigate to dashboard',
+          'open dashboard',
+          'patient dashboard',
+          'go home',
+          'go to home',
+          'go to dashboard',
+          'take me home',
+          'dashboard',
+          'home',
+          'welcome',
+          'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್',
+          'ಡ್ಯಾಶ್ ಬೋರ್ಡ್',
+          'ಮುಖಪುಟಕ್ಕೆ ಹೋಗಿ',
+          'ಮುಖಪುಟ',
+          'ಹೋಮ್',
+          'ಸ್ವಾಗತ'
+        )
+      ) {
+        navigate('/')
+        const navMsg = currentLang === 'kn' ? 'ಮುಖಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Directing to Home.'
         speak(navMsg)
         return
       }
 
       // COMMAND: "Go back"
-      if (matchesAny('go back', 'back', 'previous page', 'ಹಿಂದಕ್ಕೆ ಹೋಗಿ', 'ಹಿಂದೆ')) {
+      if (matchesAny('go back', 'back', 'previous page', 'previous', 'take me back', 'ಹಿಂದಕ್ಕೆ ಹೋಗಿ', 'ಹಿಂದಕ್ಕೆ', 'ಹಿಂದೆ', 'ಹಿಂದಿನ ಪುಟ')) {
         navigate(-1)
         const navMsg = currentLang === 'kn' ? 'ಹಿಂದಿನ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Navigating back.'
-        speak(navMsg)
-        return
-      }
-
-      // COMMAND: "Go home"
-      if (matchesAny('go home', 'home', 'ಮುಖಪುಟಕ್ಕೆ ಹೋಗಿ', 'ಮುಖಪುಟ', 'ಹೋಮ್')) {
-        navigate('/')
-        const navMsg = currentLang === 'kn' ? 'ಮುಖಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Navigating to Home.'
         speak(navMsg)
         return
       }
@@ -595,7 +768,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           'ಫಲಿತಾಂಶ ಓದಿ',
           'ಫಲಿತಾಂಶವನ್ನು ಓದಿ',
           'ಸಾರಾಂಶ ಓದಿ',
-          'ಕ್ಲೈಮ್ ಸಾರಾಂಶ'
+          'ಕ್ಲೈಮ್ ಸಾರಾಂಶ',
+          'ಕ್ಲೈಮ್ ಓದಿ',
+          'ವಿವರಣೆ ಓದಿ',
+          'ಓದಿ'
         )
       ) {
         readClaimAloud()
@@ -609,8 +785,13 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           'why was this flagged',
           'why was my claim flagged',
           'why is this flagged',
+          'why is it flagged',
           'ಏಕೆ ಫ್ಲ್ಯಾಗ್',
-          'ಏಕೆ ಫ್ಲ್ಯಾಗ್ ಮಾಡಲಾಗಿದೆ'
+          'ಯಾಕೆ ಫ್ಲ್ಯಾಗ್',
+          'ಫ್ಲ್ಯಾಗ್ ಏಕೆ',
+          'ಏಕೆ ಫ್ಲ್ಯಾಗ್ ಮಾಡಲಾಗಿದೆ',
+          'ಯಾಕೆ ಫ್ಲಾಗ್',
+          'ಸಮಸ್ಯೆ ಏನು'
         )
       ) {
         await explainClaim('why_flagged')
@@ -626,7 +807,11 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           'cost problem',
           'price alert',
           'ಬೆಲೆಯ ಸಮಸ್ಯೆ',
-          'ಬೆಲೆ ಸಮಸ್ಯೆ'
+          'ಬೆಲೆ ಸಮಸ್ಯೆ',
+          'ದರ ಸಮಸ್ಯೆ',
+          'ಹೆಚ್ಚು ಬೆಲೆ',
+          'ವೆಚ್ಚದ ಸಮಸ್ಯೆ',
+          'ಬೆಲೆ'
         )
       ) {
         await explainClaim('price_problem')
@@ -639,7 +824,11 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           'what is the clinical guideline result',
           'clinical guideline result',
           'guideline result',
-          'ಮಾರ್ಗಸೂಚಿ ಫಲಿತಾಂಶ'
+          'guideline',
+          'ಮಾರ್ಗಸೂಚಿ ಫಲಿತಾಂಶ',
+          'ಕ್ಲಿನಿಕಲ್ ಮಾರ್ಗಸೂಚಿ',
+          'ಮಾರ್ಗಸೂಚಿ',
+          'ನಿಯಮಗಳು'
         )
       ) {
         await explainClaim('clinical_guideline')
@@ -647,7 +836,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       }
 
       // COMMAND: "Explain my claim"
-      if (matchesAny('explain my claim', 'explain claim', 'explain this', 'ಕ್ಲೈಮ್ ವಿವರಿಸಿ', 'ವಿವರಿಸಿ')) {
+      if (matchesAny('explain my claim', 'explain claim', 'explain this', 'ಕ್ಲೈಮ್ ವಿವರಿಸಿ', 'ವಿವರಿಸಿ', 'ತಿಳಿಸಿ')) {
         await explainClaim('explain')
         return
       }
@@ -658,7 +847,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           'which hospital has more doctors available',
           'more doctors',
           'highest doctors',
-          'ಯಾವ ಆಸ್ಪತ್ರೆಯಲ್ಲಿ ಹೆಚ್ಚು ವೈದ್ಯರಿದ್ದಾರೆ'
+          'most doctors',
+          'ಯಾವ ಆಸ್ಪತ್ರೆಯಲ್ಲಿ ಹೆಚ್ಚು ವೈದ್ಯರಿದ್ದಾರೆ',
+          'ಹೆಚ್ಚು ವೈದ್ಯರು'
         )
       ) {
         await compareHospitalDoctors()
@@ -672,8 +863,11 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           'tell me about this hospital',
           'what doctors are available',
           'doctor availability',
+          'hospital details',
           'ಆಸ್ಪತ್ರೆ ವಿವರ ಓದಿ',
-          'ವೈದ್ಯರು ಲಭ್ಯವಿದ್ದಾರಾ'
+          'ಆಸ್ಪತ್ರೆ ವಿವರಗಳು',
+          'ವೈದ್ಯರು ಲಭ್ಯವಿದ್ದಾರಾ',
+          'ವೈದ್ಯರ ಮಾಹಿತಿ'
         )
       ) {
         await readHospitalDetails()
@@ -691,7 +885,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   )
 
   /**
-   * Start listening using ElevenLabs Voice Engine
+   * Start listening using Browser Speech Recognition & ElevenLabs Voice Engine
    */
   const startListening = useCallback(
     (continuousMode?: boolean) => {
@@ -704,59 +898,137 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         setIsContinuous(continuousMode)
       }
 
+      stopSpeaking()
       setError(null)
       setTranscript('')
       setFinalUserSaid('')
+      isListeningRef.current = true
+      setStatus('listening')
 
-      const agentId = ElevenLabsVoiceEngine.getAgentId()
-      if (!agentId) {
-        // Safe notice when public agent ID is awaiting configuration
-        setError('ElevenLabs Agent ID not configured. Configure VITE_ELEVENLABS_AGENT_ID with your public Agent ID to enable live voice.')
+      // 1. Primary Speech Recognition: Browser Web Speech API (Chrome, Edge, Safari)
+      const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+      if (SpeechRec) {
+        try {
+          if (recognitionRef.current) {
+            try {
+              recognitionRef.current.abort()
+            } catch {}
+          }
+
+          const rec = new SpeechRec()
+          recognitionRef.current = rec
+          rec.continuous = true
+          rec.interimResults = true
+          rec.lang = languageRef.current === 'kn' ? 'kn-IN' : 'en-IN'
+
+          rec.onstart = () => {
+            setStatus('listening')
+            setError(null)
+          }
+
+          rec.onresult = (event: any) => {
+            let interimText = ''
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+              const res = event.results[i]
+              const textPiece = res[0]?.transcript || ''
+              if (res.isFinal) {
+                const finalPiece = textPiece.trim()
+                if (finalPiece) {
+                  setTranscript(finalPiece)
+                  setFinalUserSaid(finalPiece)
+                  handleVoiceCommand(finalPiece)
+                }
+              } else {
+                interimText += textPiece
+              }
+            }
+            if (interimText) {
+              setTranscript(interimText)
+            }
+          }
+
+          rec.onerror = (event: any) => {
+            if (event.error === 'no-speech') {
+              // Harmless pause in speech; do not abort
+              return
+            }
+            if (event.error === 'language-not-supported') {
+              console.warn('SpeechRecognition kn-IN not supported by browser engine; attempting en-IN fallback')
+              try {
+                rec.lang = 'en-IN'
+                rec.start()
+              } catch {}
+              return
+            }
+            if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+              setError('Microphone permission denied. Please allow microphone access in your browser.')
+              setStatus('idle')
+              isListeningRef.current = false
+            } else {
+              console.warn('Speech recognition notice:', event.error)
+            }
+          }
+
+          rec.onend = () => {
+            if (isListeningRef.current && isContinuousRef.current) {
+              try {
+                rec.start()
+              } catch {}
+            } else if (!isListeningRef.current) {
+              setStatus((prev) => (prev === 'listening' ? 'idle' : prev))
+            }
+          }
+
+          rec.start()
+        } catch (recErr) {
+          console.warn('Browser SpeechRecognition init notice:', recErr)
+        }
       }
 
-      elevenLabsVoice.startSession({
-        agentId,
-        language: languageRef.current,
-        onStatusChange: (newStatus) => {
-          setStatus(newStatus)
-        },
-        onTranscript: (userText, isFinal) => {
-          setTranscript(userText)
-          if (isFinal) {
-            setFinalUserSaid(userText)
-            handleVoiceCommand(userText)
-          }
-        },
-        onAgentResponse: (agentText) => {
-          setLastSpoken(agentText)
-          setHistory((prev) => [
-            ...prev.slice(-15),
-            {
-              id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-              sender: 'assistant',
-              text: agentText,
-              timestamp: new Date(),
-            },
-          ])
-        },
-        onError: (errMessage) => {
-          setError(errMessage)
-          setStatus('idle')
-        },
-        dynamicVariables: {
-          current_page: location.pathname,
-          active_claim_id: activeClaimRef.current?.claimId || 'none',
-          active_claim_status: activeClaimRef.current?.action || 'none',
-        },
-      })
+      // 2. Also start ElevenLabs ConvAI WebSocket session if an actual public Agent ID is provided (not an sk_ API key)
+      const agentId = ElevenLabsVoiceEngine.getAgentId()
+      if (agentId && !agentId.startsWith('sk_')) {
+        elevenLabsVoice.startSession({
+          agentId,
+          language: languageRef.current,
+          onStatusChange: (newStatus) => {
+            setStatus(newStatus)
+          },
+          onTranscript: (userText, isFinal) => {
+            setTranscript(userText)
+            if (isFinal) {
+              setFinalUserSaid(userText)
+              handleVoiceCommand(userText)
+            }
+          },
+          onAgentResponse: (agentText) => {
+            speak(agentText)
+          },
+          onError: (errMessage) => {
+            console.warn('ElevenLabs ConvAI session notice:', errMessage)
+          },
+          dynamicVariables: {
+            current_page: location.pathname,
+            active_claim_id: activeClaimRef.current?.claimId || 'none',
+            active_claim_status: activeClaimRef.current?.action || 'none',
+          },
+        })
+      }
     },
-    [handleVoiceCommand, isPatient, location.pathname]
+    [handleVoiceCommand, isPatient, location.pathname, speak, stopSpeaking]
   )
 
   /**
    * Stop listening session
    */
   const stopListening = useCallback(() => {
+    isListeningRef.current = false
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort()
+      } catch {}
+      recognitionRef.current = null
+    }
     elevenLabsVoice.stopSession()
     setStatus('idle')
   }, [])

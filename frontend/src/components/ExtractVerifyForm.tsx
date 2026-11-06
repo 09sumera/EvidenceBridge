@@ -13,6 +13,7 @@ import { extractTextFromImage } from '../utils/ocr'
 import CameraCaptureModal from './CameraCaptureModal'
 import PostProcessingSummary from './PostProcessingSummary'
 import FiveModelsAuditPanel from './FiveModelsAuditPanel'
+import AuditPipelineFlowView from './AuditPipelineFlowView'
 
 interface ExtractVerifyFormProps {
   initialText?: string
@@ -44,6 +45,7 @@ export function ExtractVerifyForm({
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [displayFormat, setDisplayFormat] = useState<'flow' | 'classic'>('flow')
 
   // Optional 5-model anomaly screening inputs
   const [showAnomalyOptions, setShowAnomalyOptions] = useState(false)
@@ -371,7 +373,11 @@ export function ExtractVerifyForm({
           // Fall through to display error
         }
       }
-      setError(errMsg)
+      if (errMsg === 'Failed to fetch' || errMsg.toLowerCase().includes('failed to fetch')) {
+        setError('Unable to reach the backend API server. Please check your connection or verify that the EvidenceBridge backend service is running on port 8000.')
+      } else {
+        setError(errMsg)
+      }
       setResult(null)
     } finally {
       setLoading(false)
@@ -395,40 +401,181 @@ export function ExtractVerifyForm({
 
   return (
     <div className="space-y-6">
-      {/* Active Audit State Indicator Banner */}
-      {result && (
-        <div className={`p-4 rounded-2xl border shadow-adjudo flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-all ${
-          isDark
-            ? 'bg-adjudo-dark-surface border-neutral-700 text-neutral-200'
-            : 'bg-white border-neutral-900 text-neutral-900'
+      {/* View Format Switcher */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className={`inline-flex items-center p-1 rounded-2xl border shadow-adjudo-sm transition-all ${
+          isDark ? 'bg-neutral-900 border-neutral-700' : 'bg-white border-neutral-900'
         }`}>
-          <div className="flex items-center gap-2.5">
-            <span className={`w-8 h-8 rounded-xl font-bold flex items-center justify-center flex-shrink-0 text-base border ${
-              isDark ? 'bg-neutral-900 text-orange-400 border-neutral-700' : 'bg-cream-200 text-neutral-950 border-neutral-900'
-            }`}>
-              📌
-            </span>
-            <div>
-              <strong className={`block font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>
-                Audited Document Retained &amp; Active
-              </strong>
-              <span className={isDark ? 'text-neutral-400' : 'text-neutral-600'}>
-                Displaying audit evaluation for <strong>{result.claim.extracted_fields?.entity || result.claim.claim_id}</strong>. This result stays preserved as you browse other tabs until you sign out or start a new audit.
-              </span>
-            </div>
-          </div>
           <button
             type="button"
-            onClick={handleClear}
-            className={`px-4 py-2 rounded-xl font-bold text-xs whitespace-nowrap self-start sm:self-auto transition-all shadow-adjudo-sm inline-flex items-center gap-1.5 border cursor-pointer ${
-              isDark
-                ? 'bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border-neutral-700'
-                : 'bg-white hover:bg-cream-200 text-neutral-900 border-neutral-900'
+            onClick={() => setDisplayFormat('flow')}
+            className={`px-4 py-2 rounded-xl font-black text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              displayFormat === 'flow'
+                ? isDark
+                  ? 'bg-neutral-100 text-neutral-950 shadow-adjudo-sm'
+                  : 'bg-neutral-950 text-white shadow-adjudo-sm'
+                : isDark
+                ? 'text-neutral-400 hover:text-white'
+                : 'text-neutral-600 hover:text-neutral-950'
             }`}
           >
-            <span>🔄</span>
-            <span>Start New Audit</span>
+            <span>🔀 Pipeline Flow Format</span>
+            <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 font-bold">
+              Default
+            </span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setDisplayFormat('classic')}
+            className={`px-4 py-2 rounded-xl font-black text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              displayFormat === 'classic'
+                ? isDark
+                  ? 'bg-neutral-100 text-neutral-950 shadow-adjudo-sm'
+                  : 'bg-neutral-950 text-white shadow-adjudo-sm'
+                : isDark
+                ? 'text-neutral-400 hover:text-white'
+                : 'text-neutral-600 hover:text-neutral-950'
+            }`}
+          >
+            <span>📄 Classic Full View</span>
+          </button>
+        </div>
+      </div>
+
+      {displayFormat === 'flow' ? (
+        <AuditPipelineFlowView
+          result={result}
+          text={text}
+          setText={setText}
+          loading={loading}
+          ocrLoading={ocrLoading}
+          ocrStatusText={ocrStatusText}
+          ocrProgress={ocrProgress}
+          ocrWarning={ocrWarning}
+          ocrSuccessMessage={ocrSuccessMessage}
+          handleSubmit={handleSubmit}
+          handleClear={handleClear}
+          fileInputRef={fileInputRef}
+          handleFileUpload={handleFileUpload}
+          imagePreview={imagePreview}
+          imageName={imageName}
+          handleRemoveImage={handleRemoveImage}
+          readClaimAloud={readClaimAloud}
+          model6Prediction={model6Prediction}
+          isDark={isDark}
+        />
+      ) : (
+        <>
+          {/* Visual Decision Banner (Audit Decision Result) */}
+      {result && (
+        <div className="animate-fadeIn">
+          <div
+            className={`rounded-2xl border-2 p-7 sm:p-8 shadow-adjudo transition-all ${
+              result.verification.action === 'accept'
+                ? isDark
+                  ? 'bg-emerald-950/40 border-emerald-600'
+                  : 'bg-emerald-50/90 border-emerald-700'
+                : result.verification.action === 'flag'
+                ? isDark
+                  ? 'bg-amber-950/40 border-amber-600'
+                  : 'bg-amber-50/90 border-amber-700'
+                : isDark
+                ? 'bg-neutral-900 border-neutral-700'
+                : 'bg-cream-100 border-neutral-900'
+            }`}
+          >
+            <div className="flex flex-col md:flex-row justify-between md:items-center gap-5">
+              <div>
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <span className={`text-xs font-black uppercase tracking-wider ${isDark ? 'text-neutral-400' : 'text-neutral-700'}`}>
+                    Audit Decision &bull; ID: {result.claim.claim_id}
+                  </span>
+                  <VerificationBadge action={result.verification.action} size="sm" />
+                  <VerdictBadge verdict={result.verification.verdict} />
+                </div>
+
+                <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${isDark ? 'text-white' : 'text-neutral-950'}`}>
+                  {result.verification.action === 'accept' && (
+                    <span className={isDark ? 'text-emerald-300' : 'text-emerald-950'}>Approved: Matches Medical Guidelines</span>
+                  )}
+                  {result.verification.action === 'flag' && (
+                    <span className={isDark ? 'text-amber-300' : 'text-amber-950'}>Flagged for Review: Potential Issue Detected</span>
+                  )}
+                  {result.verification.action === 'abstain' && (
+                    <span className={isDark ? 'text-neutral-200' : 'text-neutral-950'}>Not enough reliable evidence to make a decision</span>
+                  )}
+                </h2>
+
+                <p className={`text-sm sm:text-base mt-2 max-w-3xl leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                  {result.verification.action === 'abstain'
+                    ? 'The system safely held this claim instead of guessing because sufficient verified guidelines or pricing benchmarks are not yet available.'
+                    : result.verification.reasoning}
+                </p>
+
+                {/* Plain-English "What this means & What to do next" */}
+                <div className={`mt-4 p-4 rounded-xl border text-xs sm:text-sm space-y-1.5 shadow-adjudo-sm ${
+                  isDark
+                    ? 'bg-neutral-900/90 border-neutral-700 text-neutral-200'
+                    : 'bg-white border-neutral-900 text-neutral-900'
+                }`}>
+                  <div className={`font-black flex items-center gap-2 ${isDark ? 'text-white' : 'text-neutral-950'}`}>
+                    <span className="text-base">💡</span>
+                    <span>What this means &amp; What you can do next:</span>
+                  </div>
+                  {result.verification.action === 'flag' && (
+                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                      <strong>Recommendation:</strong> The billed amount appears higher than the available comparison price, or clinical guidelines advise caution.
+                      You can request an itemized hospital bill with procedure codes (CPT/HCPCS), ask for in-network pricing, or contact your provider for billing clarification.
+                    </p>
+                  )}
+                  {result.verification.action === 'accept' && (
+                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                      <strong>Recommendation:</strong> The procedure indication aligns with published medical guidelines and the billed charges fall within standard fair pricing benchmarks.
+                    </p>
+                  )}
+                  {result.verification.action === 'abstain' && (
+                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                      <strong>Recommendation:</strong> Not enough reliable evidence to make an automated decision. Ask your hospital for the exact procedure code (CPT) or check with your insurer to clarify coverage without ungrounded assumptions.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex items-center gap-2.5 sm:self-start flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleClear}
+                  className="adjudo-btn-secondary px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap flex items-center gap-2 cursor-pointer"
+                  title="Clear this audit and evaluate a new document"
+                >
+                  <span>🔄</span>
+                  <span>New Audit</span>
+                </button>
+
+                <Link
+                  to={`/claims/${encodeURIComponent(result.claim.claim_id)}`}
+                  className="adjudo-btn-dark px-5 py-2.5 rounded-xl text-xs sm:text-sm font-black whitespace-nowrap cursor-pointer"
+                >
+                  View Full 9-Stage Audit &rarr;
+                </Link>
+              </div>
+            </div>
+
+            {/* Abstention specific callout */}
+            {result.verification.action === 'abstain' && (
+              <div className={`mt-4 p-4 rounded-xl border text-sm leading-relaxed ${
+                isDark ? 'bg-neutral-800 border-neutral-700 text-neutral-200' : 'bg-cream-200 border-neutral-900 text-neutral-900'
+              }`}>
+                <strong className={`font-black block mb-1 ${isDark ? 'text-white' : 'text-neutral-950'}`}>
+                  Safe Refusal Enforced:
+                </strong>
+                {result.verification.abstain_reason ||
+                  'The system chose not to guess because authoritative guidelines were missing or pricing benchmarks were absent for this high-cost service.'}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -482,24 +629,6 @@ export function ExtractVerifyForm({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
               </svg>
               Upload Photo
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsCameraModalOpen(true)}
-              disabled={ocrLoading}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all shadow-adjudo-sm cursor-pointer disabled:opacity-50 ${
-                isDark
-                  ? 'border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800'
-                  : 'border-neutral-900 bg-white text-neutral-900 hover:bg-cream-200'
-              }`}
-              title="Take a photo with your device camera"
-            >
-              <svg className={`w-4 h-4 ${isDark ? 'text-orange-400' : 'text-orange-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              Take Photo
             </button>
 
             {/* Hidden native file input for Upload Photo */}
@@ -663,146 +792,6 @@ export function ExtractVerifyForm({
           required
         />
 
-        {/* Source metadata inputs */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5">
-          <div>
-            <label
-              htmlFor="source-type"
-              className={`block text-xs sm:text-sm font-black mb-1.5 ${isDark ? 'text-neutral-200' : 'text-neutral-950'}`}
-            >
-              Document Classification
-            </label>
-            <select
-              id="source-type"
-              value={sourceType}
-              onChange={(e) => setSourceType(e.target.value as SourceType)}
-              className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-bold focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all ${
-                isDark
-                  ? 'border-neutral-700 bg-neutral-900 text-neutral-100'
-                  : 'border-neutral-900 bg-white text-neutral-950'
-              }`}
-            >
-              <option value="hospital_bill">Hospital Bill / Itemized Statement</option>
-              <option value="clinical_note">Clinical Chart Note / EHR</option>
-              <option value="patient_report">Patient Invoice / Post</option>
-              <option value="forum_post">Health Forum Report</option>
-              <option value="other">Other Medical Record</option>
-            </select>
-          </div>
-
-          <div>
-            <label
-              htmlFor="source-url"
-              className={`block text-xs sm:text-sm font-black mb-1.5 ${isDark ? 'text-neutral-200' : 'text-neutral-950'}`}
-            >
-              Document Origin or Reference ID (Optional)
-            </label>
-            <input
-              id="source-url"
-              type="text"
-              value={sourceUrl}
-              onChange={(e) => setSourceUrl(e.target.value)}
-              placeholder="e.g. ehr://houston-methodist/pt-89321"
-              className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all ${
-                isDark
-                  ? 'border-neutral-700 bg-neutral-900 text-neutral-100 placeholder:text-neutral-500'
-                  : 'border-neutral-900 bg-white text-neutral-950 placeholder:text-neutral-400'
-              }`}
-            />
-          </div>
-        </div>
-
-        {/* Optional 5-Model Screening Helper */}
-        <div className="mt-4 pt-3 border-t border-slate-100">
-          <button
-            type="button"
-            onClick={() => setShowAnomalyOptions(!showAnomalyOptions)}
-            className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
-          >
-            <span>{showAnomalyOptions ? '▼' : '▶'}</span>
-            <span>Attach Provider &amp; Inpatient Metrics for Models 4 &amp; 5 (Optional)</span>
-          </button>
-
-          {showAnomalyOptions && (
-            <div className="mt-2.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-3 animate-fadeIn">
-              <div className="font-semibold text-slate-800">
-                Simulated Provider &amp; Inpatient Test Benchmarks (Model 4 &amp; Model 5)
-              </div>
-              <p className="text-[11px] text-slate-500 leading-relaxed">
-                By default, Models 4 &amp; 5 evaluate genuine claim text, historical storage records, or safely abstain when data is absent. You may select a verified audit test preset:
-              </p>
-
-              <div className="space-y-2">
-                <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white transition-colors border border-transparent hover:border-slate-200">
-                  <input
-                    type="radio"
-                    name="anomalyPreset"
-                    value="none"
-                    checked={anomalyPreset === 'none' && !attachSampleAnomalyData}
-                    onChange={() => {
-                      setAnomalyPreset('none')
-                      setAttachSampleAnomalyData(false)
-                    }}
-                    className="mt-0.5 text-sky-600 focus:ring-sky-500"
-                  />
-                  <div>
-                    <strong className="block font-medium text-slate-900">
-                      Standard Evaluation (Auto-Extract or Storage Query)
-                    </strong>
-                    <span className="text-[11px] text-slate-500 block leading-tight">
-                      Model 4 queries genuine database claims for the provider or extracted dossier; Model 5 derives inpatient metrics from text or defers outpatient visits.
-                    </span>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white transition-colors border border-transparent hover:border-slate-200">
-                  <input
-                    type="radio"
-                    name="anomalyPreset"
-                    value="normal_sharma"
-                    checked={anomalyPreset === 'normal_sharma' || (attachSampleAnomalyData && anomalyPreset !== 'shree_audit')}
-                    onChange={() => {
-                      setAnomalyPreset('normal_sharma')
-                      setAttachSampleAnomalyData(true)
-                    }}
-                    className="mt-0.5 text-sky-600 focus:ring-sky-500"
-                  />
-                  <div>
-                    <strong className="block font-medium text-slate-900">
-                      Dr. Arun Sharma — Normal Provider &amp; 4-Day Normal Inpatient Stay
-                    </strong>
-                    <span className="text-[11px] text-slate-500 block leading-tight">
-                      Evaluates Model 4 with normal practice distributions and Model 5 with a standard 4-day inpatient stay (yielding NORMAL / NOT FLAGGED).
-                    </span>
-                  </div>
-                </label>
-
-                <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-white transition-colors border border-transparent hover:border-slate-200">
-                  <input
-                    type="radio"
-                    name="anomalyPreset"
-                    value="shree_audit"
-                    checked={anomalyPreset === 'shree_audit'}
-                    onChange={() => {
-                      setAnomalyPreset('shree_audit')
-                      setAttachSampleAnomalyData(true)
-                    }}
-                    className="mt-0.5 text-sky-600 focus:ring-sky-500"
-                  />
-                  <div>
-                    <strong className="block font-medium text-slate-900">
-                      Shree Medical Institute — Inpatient Audit Reproduction Case
-                    </strong>
-                    <span className="text-[11px] text-slate-500 block leading-tight">
-                      Evaluates Model 4 with Shree Medical Institute 2,100-beneficiary volume (ANOMALOUS / Review recommended) and Model 5 with calibrated inpatient metrics.
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </div>
-          )}
-        </div>
-
         {/* Actions Row */}
         <div className={`flex items-center justify-between pt-6 mt-6 border-t ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
           <button
@@ -863,127 +852,9 @@ export function ExtractVerifyForm({
         </div>
       )}
 
-      {/* Audit Result Display */}
+      {/* Detailed Audit Results & Modules */}
       {result && (
         <div className="space-y-6 animate-fadeIn">
-          {/* Visual Decision Banner */}
-          <div
-            className={`rounded-2xl border-2 p-7 sm:p-8 shadow-adjudo transition-all ${
-              result.verification.action === 'accept'
-                ? isDark
-                  ? 'bg-emerald-950/40 border-emerald-600'
-                  : 'bg-emerald-50/90 border-emerald-700'
-                : result.verification.action === 'flag'
-                ? isDark
-                  ? 'bg-amber-950/40 border-amber-600'
-                  : 'bg-amber-50/90 border-amber-700'
-                : isDark
-                ? 'bg-neutral-900 border-neutral-700'
-                : 'bg-cream-100 border-neutral-900'
-            }`}
-          >
-            <div className="flex flex-col md:flex-row justify-between md:items-center gap-5">
-              <div>
-                <div className="flex items-center gap-2 mb-2 flex-wrap">
-                  <span className={`text-xs font-black uppercase tracking-wider ${isDark ? 'text-neutral-400' : 'text-neutral-700'}`}>
-                    Audit Decision &bull; ID: {result.claim.claim_id}
-                  </span>
-                  <VerificationBadge action={result.verification.action} size="sm" />
-                  <VerdictBadge verdict={result.verification.verdict} />
-                </div>
-
-                <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${isDark ? 'text-white' : 'text-neutral-950'}`}>
-                  {result.verification.action === 'accept' && (
-                    <span className={isDark ? 'text-emerald-300' : 'text-emerald-950'}>Approved: Matches Medical Guidelines</span>
-                  )}
-                  {result.verification.action === 'flag' && (
-                    <span className={isDark ? 'text-amber-300' : 'text-amber-950'}>Flagged for Review: Potential Issue Detected</span>
-                  )}
-                  {result.verification.action === 'abstain' && (
-                    <span className={isDark ? 'text-neutral-200' : 'text-neutral-950'}>Not enough reliable evidence to make a decision</span>
-                  )}
-                </h2>
-
-                <p className={`text-sm sm:text-base mt-2 max-w-3xl leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                  {result.verification.action === 'abstain'
-                    ? 'The system safely held this claim instead of guessing because sufficient verified guidelines or pricing benchmarks are not yet available.'
-                    : result.verification.reasoning}
-                </p>
-
-                {/* Plain-English "What this means & What to do next" */}
-                <div className={`mt-4 p-4 rounded-xl border text-xs sm:text-sm space-y-1.5 shadow-adjudo-sm ${
-                  isDark
-                    ? 'bg-neutral-900/90 border-neutral-700 text-neutral-200'
-                    : 'bg-white border-neutral-900 text-neutral-900'
-                }`}>
-                  <div className={`font-black flex items-center gap-2 ${isDark ? 'text-white' : 'text-neutral-950'}`}>
-                    <span className="text-base">💡</span>
-                    <span>What this means &amp; What you can do next:</span>
-                  </div>
-                  {result.verification.action === 'flag' && (
-                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                      <strong>Recommendation:</strong> The billed amount appears higher than the available comparison price, or clinical guidelines advise caution.
-                      You can request an itemized hospital bill with procedure codes (CPT/HCPCS), ask for in-network pricing, or contact your provider for billing clarification.
-                    </p>
-                  )}
-                  {result.verification.action === 'accept' && (
-                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                      <strong>Recommendation:</strong> The procedure indication aligns with published medical guidelines and the billed charges fall within standard fair pricing benchmarks.
-                    </p>
-                  )}
-                  {result.verification.action === 'abstain' && (
-                    <p className={`leading-relaxed ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                      <strong>Recommendation:</strong> Not enough reliable evidence to make an automated decision. Ask your hospital for the exact procedure code (CPT) or check with your insurer to clarify coverage without ungrounded assumptions.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Quick Actions */}
-              <div className="flex items-center gap-2.5 sm:self-start flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleClear}
-                  className="adjudo-btn-secondary px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap flex items-center gap-2 cursor-pointer"
-                  title="Clear this audit and evaluate a new document"
-                >
-                  <span>🔄</span>
-                  <span>New Audit</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => readClaimAloud()}
-                  className="adjudo-btn-secondary px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap flex items-center gap-2 cursor-pointer"
-                  title="Read audit decision aloud using browser AI voice (English / ಕನ್ನಡ)"
-                >
-                  <span>🔊</span>
-                  <span>Read Result Aloud</span>
-                </button>
-
-                <Link
-                  to={`/claims/${encodeURIComponent(result.claim.claim_id)}`}
-                  className="adjudo-btn-dark px-5 py-2.5 rounded-xl text-xs sm:text-sm font-black whitespace-nowrap cursor-pointer"
-                >
-                  View Full 7-Stage Audit &rarr;
-                </Link>
-              </div>
-            </div>
-
-            {/* Abstention specific callout */}
-            {result.verification.action === 'abstain' && (
-              <div className={`mt-4 p-4 rounded-xl border text-sm leading-relaxed ${
-                isDark ? 'bg-neutral-800 border-neutral-700 text-neutral-200' : 'bg-cream-200 border-neutral-900 text-neutral-900'
-              }`}>
-                <strong className={`font-black block mb-1 ${isDark ? 'text-white' : 'text-neutral-950'}`}>
-                  Safe Refusal Enforced:
-                </strong>
-                {result.verification.abstain_reason ||
-                  'The system chose not to guess because authoritative guidelines were missing or pricing benchmarks were absent for this high-cost service.'}
-              </div>
-            )}
-          </div>
-
           {/* Five Integrated AI Models Pipeline Breakdown */}
           <FiveModelsAuditPanel
             claimId={result.claim.claim_id}
@@ -1148,12 +1019,9 @@ export function ExtractVerifyForm({
                       : 'Not Detected (National Benchmark Applied)'}
                   </div>
                   {result.claim.location?.normalized_key && (
-                    <Link
-                      to={`/trust-density?key=${encodeURIComponent(result.claim.location.normalized_key)}`}
-                      className="text-xs text-sky-600 hover:text-sky-800 font-semibold inline-block mt-1"
-                    >
-                      View Hospital Reliability for {result.claim.location.city} &rarr;
-                    </Link>
+                    <span className="text-xs text-sky-600 font-semibold inline-block mt-1">
+                      Hospital Reliability: {result.claim.location.city} verified
+                    </span>
                   )}
                 </div>
 
@@ -1193,6 +1061,8 @@ export function ExtractVerifyForm({
             </div>
           </details>
         </div>
+      )}
+        </>
       )}
 
       {/* Live Camera Viewfinder Modal */}

@@ -10,6 +10,7 @@ import type {
   SharedClaimContext,
   CrossModelSynthesis,
   GroupedMedicalInformation,
+  MedicineGroup,
   BillingReconciliationResult,
   BillingLineItem,
 } from '../types'
@@ -82,7 +83,7 @@ function formatReadableText(text?: string | null): string {
     .trim()
 }
 
-function buildFallbackGroupedInfo(
+export function buildFallbackGroupedInfo(
   sharedContext?: SharedClaimContext | null,
   nerEntities?: ExtractedEntity[] | null
 ): GroupedMedicalInformation {
@@ -207,37 +208,296 @@ function buildFallbackGroupedInfo(
     if (preMatch) preauthNum = preMatch[1].trim()
   }
 
-  // 2. Medicine Information
+  // 2. Medicine Information - Multi-Medicine Extraction & Normalization
+  const individualMedicines: MedicineGroup[] = []
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+
+  const KNOWN_MED_NAMES = [
+    'Paracetamol', 'Pantoprazole', 'ORS', 'Oral Rehydration Salts', 'Metformin',
+    'Amoxicillin', 'Azithromycin', 'Ceftriaxone', 'Domperidone', 'Ibuprofen',
+    'Ondansetron', 'Ciprofloxacin', 'Atorvastatin', 'Telmisartan', 'Amlodipine',
+    'Rabeprazole', 'Cetirizine', 'Ranitidine', 'Omeprazole', 'Diclofenac'
+  ]
+
+  const resolveActiveIngredient = (name: string): string => {
+    const lower = name.toLowerCase()
+    for (const km of KNOWN_MED_NAMES) {
+      if (lower.includes(km.toLowerCase())) return km
+    }
+    const cleaned = name.replace(/^(?:Tab\.?|Cap\.?|Syp\.?|Inj\.?|Sachet)\s*/i, '').trim()
+    return cleaned || name
+  }
+
+  // Strategy 1: Tabular prescription rows with header
+  let headerIdx = -1
+  const colMap: Record<string, number> = {}
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx]
+    if (/\b(Medicine|Drug|Tablet|Medication|Item)\b/i.test(line) && /\b(Strength|Dosage|Duration|Quantity|Qty|Frequency|Dose)\b/i.test(line)) {
+      headerIdx = idx
+      let cols: string[] = []
+      if (line.includes('\t')) cols = line.split('\t').map((c) => c.trim()).filter(Boolean)
+      else if (line.includes('|')) cols = line.split('|').map((c) => c.trim()).filter(Boolean)
+      else cols = line.split(/ {2,}/).map((c) => c.trim()).filter(Boolean)
+
+      cols.forEach((cName, cI) => {
+        const cLower = cName.toLowerCase()
+        if (/medicine|drug|tablet|item|description/.test(cLower)) colMap.medicine = cI
+        else if (/strength|potency/.test(cLower)) colMap.strength = cI
+        else if (/dosage|dose/.test(cLower)) colMap.dosage = cI
+        else if (/duration|days|period/.test(cLower)) colMap.duration = cI
+        else if (/quantity|qty|units/.test(cLower)) colMap.quantity = cI
+        else if (/frequency|timing/.test(cLower)) colMap.frequency = cI
+        else if (/instruction|directions/.test(cLower)) colMap.instructions = cI
+      })
+      break
+    }
+  }
+
+  if (headerIdx !== -1 && colMap.medicine !== undefined) {
+    for (let idx = headerIdx + 1; idx < lines.length; idx++) {
+      const line = lines[idx]
+      if (/subtotal|grand total|total:|doctor:|patient:|encounter:|hospital:|expected|diagnosis:|date:|age:/i.test(line)) {
+        break
+      }
+      let cells: string[] = []
+      if (line.includes('\t')) cells = line.split('\t').map((c) => c.trim()).filter(Boolean)
+      else if (line.includes('|')) cells = line.split('|').map((c) => c.trim()).filter(Boolean)
+      else cells = line.split(/ {2,}/).map((c) => c.trim()).filter(Boolean)
+
+      if (cells.length > colMap.medicine) {
+        const mName = cells[colMap.medicine]
+        if (!mName || mName.length < 2 || mName.startsWith('---') || mName.startsWith('===')) continue
+        const mStr = colMap.strength !== undefined && cells.length > colMap.strength ? cells[colMap.strength] : ''
+        const mDosage = colMap.dosage !== undefined && cells.length > colMap.dosage ? cells[colMap.dosage] : ''
+        const mDur = colMap.duration !== undefined && cells.length > colMap.duration ? cells[colMap.duration] : ''
+        const mQty = colMap.quantity !== undefined && cells.length > colMap.quantity ? cells[colMap.quantity] : ''
+
+        let mFreq = ''
+        let mInst = ''
+        const freqM = mDosage.match(/\b(once daily|twice daily|three times daily|thrice daily|as needed|as directed|before breakfast|after food|before food|with meals|OD|BD|TDS|QID|sos|prn|daily)\b/i)
+        if (freqM) {
+          mFreq = freqM[1].trim()
+          mInst = mDosage
+        } else if (mDosage) {
+          mInst = mDosage
+        }
+
+        const displayQty = mQty || mDosage || '1'
+        const aiClean = resolveActiveIngredient(mName)
+
+        individualMedicines.push({
+          medicine_name: { value: mName, confidence: 0.98, requires_human_review: false },
+          generic_name: { value: aiClean, confidence: 0.95, requires_human_review: false },
+          active_ingredient: { value: aiClean, confidence: 0.95, requires_human_review: false },
+          strength: mStr ? { value: mStr, confidence: 0.95, requires_human_review: false } : null,
+          dosage_quantity: displayQty ? { value: displayQty, confidence: 0.95, requires_human_review: false } : null,
+          route: { value: 'Oral', confidence: 0.9, requires_human_review: false },
+          frequency: mFreq ? { value: mFreq, confidence: 0.92, requires_human_review: false } : null,
+          duration: mDur ? { value: mDur, confidence: 0.92, requires_human_review: false } : null,
+          instructions: mInst ? { value: mInst, confidence: 0.9, requires_human_review: false } : null,
+        })
+      }
+    }
+  }
+
+  // Strategy 2: Tabular prescription rows without header
+  if (individualMedicines.length === 0) {
+    for (const line of lines) {
+      if (/subtotal|grand total|total:|doctor:|patient:|encounter:|hospital:|expected|diagnosis:|date:|age:/i.test(line)) continue
+      let cells: string[] = []
+      if (line.includes('\t')) cells = line.split('\t').map((c) => c.trim()).filter(Boolean)
+      else if (line.includes('|')) cells = line.split('|').map((c) => c.trim()).filter(Boolean)
+      else cells = line.split(/ {2,}/).map((c) => c.trim()).filter(Boolean)
+
+      if (cells.length >= 3) {
+        const firstCell = cells[0]
+        const isMed = KNOWN_MED_NAMES.some((km) => firstCell.toLowerCase().includes(km.toLowerCase())) ||
+          /^(?:Tab\.?|Cap\.?|Syp\.?|Inj\.?|Sachet)\s+[A-Za-z]+/i.test(firstCell)
+        if (isMed) {
+          const mName = firstCell
+          const mStr = cells.length > 1 ? cells[1] : ''
+          const mDosage = cells.length > 2 ? cells[2] : ''
+          const mDur = cells.length > 3 ? cells[3] : ''
+          const mQty = cells.length > 4 ? cells[4] : ''
+
+          let mFreq = ''
+          let mInst = ''
+          const freqM = mDosage.match(/\b(once daily|twice daily|three times daily|thrice daily|as needed|as directed|before breakfast|after food|before food|with meals|OD|BD|TDS|QID|sos|prn|daily)\b/i)
+          if (freqM) {
+            mFreq = freqM[1].trim()
+            mInst = mDosage
+          } else if (mDosage) {
+            mInst = mDosage
+          }
+
+          const displayQty = mQty || mDosage || '1'
+          const aiClean = resolveActiveIngredient(mName)
+
+          individualMedicines.push({
+            medicine_name: { value: mName, confidence: 0.98, requires_human_review: false },
+            generic_name: { value: aiClean, confidence: 0.95, requires_human_review: false },
+            active_ingredient: { value: aiClean, confidence: 0.95, requires_human_review: false },
+            strength: mStr ? { value: mStr, confidence: 0.95, requires_human_review: false } : null,
+            dosage_quantity: displayQty ? { value: displayQty, confidence: 0.95, requires_human_review: false } : null,
+            route: { value: 'Oral', confidence: 0.9, requires_human_review: false },
+            frequency: mFreq ? { value: mFreq, confidence: 0.92, requires_human_review: false } : null,
+            duration: mDur ? { value: mDur, confidence: 0.92, requires_human_review: false } : null,
+            instructions: mInst ? { value: mInst, confidence: 0.9, requires_human_review: false } : null,
+          })
+        }
+      }
+    }
+  }
+
+  // Strategy 3: Check numbered line items (e.g. 1. Paracetamol ...)
+  if (individualMedicines.length === 0) {
+    const numMatches = text.match(/(?:^|\n)\s*(\d+)[\.\)]\s+([^\n]+(?:\n(?!\s*\d+[\.\)]|\s*[-*•]|\s*Expected|\s*Total)[^\n]+)*)/gi)
+    if (numMatches) {
+      for (const block of numMatches) {
+        const mNum = block.trim().match(/^(\d+)[\.\)]\s+(.+)/s)
+        if (mNum) {
+          const itemText = mNum[2].trim()
+          const firstLine = itemText.split('\n')[0]
+          const nameM = firstLine.match(/^(?:Tab\.?|Cap\.?|Syp\.?|Inj\.?)?\s*([A-Za-z0-9\s]+?)(?:\s+\d+\s*(?:mg|ml|mcg|g)|(?:\s*-\s*)|\n|$)/i)
+          const mName = nameM ? nameM[1].trim() : firstLine.slice(0, 30).trim()
+          if (/subtotal|grand total|total|invoice|doctor|patient|encounter/i.test(mName)) continue
+
+          const strM = firstLine.match(/\b(\d+(?:\.\d+)?\s*(?:mg\/ml|mcg\/ml|w\/v|g\/l|mg|mcg|g|ml|%))\b/i)
+          let qtyM = firstLine.match(/\b(\d+\s*(?:tablets?|capsules?|sachets?|bottles?|vials?|strips?|units?))\b/i)
+          if (!qtyM) qtyM = itemText.match(/\bQty[:\s]*(\d+)\b/i)
+          const upM = itemText.match(/Unit\s*Price[:\s]*(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d{2})?)/i)
+          const laM = itemText.match(/Line\s*Amount[:\s]*(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d{2})?)/i)
+          const instM = itemText.match(/Instructions?[:\s]*(.+)/i)
+          const instVal = instM ? instM[1].trim() : ''
+          const freqM = (instVal || itemText).match(/\b(once daily|twice daily|three times daily|thrice daily|as needed|OD|BD|TDS|QID|sos|prn|daily)\b/i)
+          const durM = (instVal || itemText).match(/\b(\d+\s*(?:days?|weeks?|months?))\b/i)
+
+          const aiClean = resolveActiveIngredient(mName)
+
+          individualMedicines.push({
+            medicine_name: { value: mName, confidence: 0.95, requires_human_review: false },
+            generic_name: { value: aiClean, confidence: 0.95, requires_human_review: false },
+            active_ingredient: { value: aiClean, confidence: 0.95, requires_human_review: false },
+            strength: strM ? { value: strM[1].trim(), confidence: 0.92, requires_human_review: false } : null,
+            dosage_quantity: qtyM ? { value: qtyM[1].trim(), confidence: 0.92, requires_human_review: false } : null,
+            route: { value: 'Oral', confidence: 0.85, requires_human_review: false },
+            frequency: freqM ? { value: freqM[1].trim(), confidence: 0.9, requires_human_review: false } : null,
+            duration: durM ? { value: durM[1].trim(), confidence: 0.9, requires_human_review: false } : null,
+            instructions: instVal ? { value: instVal, confidence: 0.88, requires_human_review: false } : null,
+            unit_price: upM ? { value: `₹${upM[1].trim()}`, confidence: 0.95, requires_human_review: false } : null,
+            line_amount: laM ? { value: `₹${laM[1].trim()}`, confidence: 0.95, requires_human_review: false } : null,
+          })
+        }
+      }
+    }
+  }
+
+  // Strategy 4: Check bulleted items (e.g. - Paracetamol: 8 × ₹5 = ₹40)
+  if (individualMedicines.length === 0) {
+    const bulletMatches = text.matchAll(/^[-*•]\s*([A-Za-z0-9\s]+?)[:\-]\s*(?:(\d+)\s*[x×]\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)\s*=\s*(?:₹|INR|Rs\.?)?\s*([\d.]+)|(.+))/gm)
+    for (const bm of bulletMatches) {
+      const bName = bm[1]?.trim() || ''
+      if (!bName || /total|subtotal|tax|discount/i.test(bName)) continue
+      const bQty = bm[2]?.trim() || ''
+      const bUp = bm[3] ? `₹${bm[3].trim()}` : null
+      const bLa = bm[4] ? `₹${bm[4].trim()}` : null
+      const aiClean = resolveActiveIngredient(bName)
+      individualMedicines.push({
+        medicine_name: { value: bName, confidence: 0.92, requires_human_review: false },
+        generic_name: { value: aiClean, confidence: 0.92, requires_human_review: false },
+        active_ingredient: { value: aiClean, confidence: 0.92, requires_human_review: false },
+        dosage_quantity: bQty ? { value: bQty, confidence: 0.9, requires_human_review: false } : null,
+        route: { value: 'Oral', confidence: 0.85, requires_human_review: false },
+        unit_price: bUp ? { value: bUp, confidence: 0.95, requires_human_review: false } : null,
+        line_amount: bLa ? { value: bLa, confidence: 0.95, requires_human_review: false } : null,
+      })
+    }
+  }
+
+  // Strategy 5: Multiple distinct drug entities from NER
+  if (individualMedicines.length === 0) {
+    const drugEnts = ents.filter((e) => ['GENERIC_NAME', 'BRAND_NAME', 'ACTIVE_INGREDIENT'].includes(e.entity) && e.text.trim().length >= 3)
+    const seenDrugs = new Set<string>()
+    const distinctEnts = drugEnts.filter((e) => {
+      const lower = e.text.trim().toLowerCase()
+      if (seenDrugs.has(lower) || /medicines|drugs|pharmacy|prescribed/i.test(lower)) return false
+      seenDrugs.add(lower)
+      return true
+    })
+    if (distinctEnts.length > 1) {
+      for (const de of distinctEnts) {
+        const dName = de.text.trim()
+        const aiClean = resolveActiveIngredient(dName)
+        const strMatchD = text.match(new RegExp(`${dName}[\\s\\w\\-]*?(\\d+(?:\\.\\d+)?\\s*(?:mg|mcg|g|ml))\\b`, 'i'))
+        individualMedicines.push({
+          medicine_name: { value: dName, confidence: de.confidence, requires_human_review: de.requires_human_review },
+          generic_name: { value: aiClean, confidence: de.confidence, requires_human_review: false },
+          active_ingredient: { value: aiClean, confidence: de.confidence, requires_human_review: false },
+          strength: strMatchD ? { value: strMatchD[1].trim(), confidence: 0.9, requires_human_review: false } : null,
+          route: { value: 'Oral', confidence: 0.85, requires_human_review: false },
+        })
+      }
+    }
+  }
+
+  // Cross-enrich unit price, line amount, and quantity from bullet pricing lines
+  for (const mg of individualMedicines) {
+    const mName = mg.medicine_name?.value || ''
+    const aiName = mg.active_ingredient?.value || ''
+    let priceM: RegExpMatchArray | null = null
+    if (mName) {
+      priceM = text.match(new RegExp(`[-*•]?\\s*${mName}[:\\s]+(\\d+)\\s*[x×]\\s*(?:₹|INR|Rs\\.?)?\\s*([\\d.]+)\\s*=\\s*(?:₹|INR|Rs\\.?)?\\s*([\\d.]+)`, 'i'))
+    }
+    if (!priceM && aiName) {
+      priceM = text.match(new RegExp(`[-*•]?\\s*${aiName}[:\\s]+(\\d+)\\s*[x×]\\s*(?:₹|INR|Rs\\.?)?\\s*([\\d.]+)\\s*=\\s*(?:₹|INR|Rs\\.?)?\\s*([\\d.]+)`, 'i'))
+    }
+    if (priceM) {
+      if (!mg.dosage_quantity || mg.dosage_quantity.value === '1' || mg.dosage_quantity.value === '1 Tab') {
+        mg.dosage_quantity = { value: priceM[1], confidence: 0.95, requires_human_review: false }
+      }
+      if (!mg.unit_price) {
+        mg.unit_price = { value: `₹${priceM[2]}`, confidence: 0.95, requires_human_review: false }
+      }
+      if (!mg.line_amount) {
+        mg.line_amount = { value: `₹${priceM[3]}`, confidence: 0.95, requires_human_review: false }
+      }
+    }
+  }
+
+  const primaryMed = individualMedicines[0]
   const medEnt = ents.find((e) => ['GENERIC_NAME', 'BRAND_NAME', 'ACTIVE_INGREDIENT', 'MEDICINE_NAME'].includes(e.entity))
-  const medName = medEnt?.text || sharedContext?.medicines?.[0] || ''
+  const medName = primaryMed?.medicine_name?.value || medEnt?.text || sharedContext?.medicines?.[0] || ''
   const doseEnt = ents.find((e) => ['DOSAGE', 'QUANTITY'].includes(e.entity))
   const strEnt = ents.find((e) => e.entity === 'STRENGTH')
 
   const fullMedStr = `${medName} ${doseEnt?.text || ''}`
 
-  let activeIng = ''
-  const aiMatch = fullMedStr.match(/(?:Sodium Chloride|Paracetamol|Amoxicillin|Domperidone|Ceftriaxone|Azithromycin|Metformin|Pantoprazole|Ibuprofen|Ciprofloxacin|Ondansetron)/i)
-  if (aiMatch) {
-    activeIng = aiMatch[0].trim()
-  } else {
-    const aiEnt = ents.find((e) => e.entity === 'ACTIVE_INGREDIENT')
-    if (aiEnt) activeIng = aiEnt.text
+  let activeIng = primaryMed?.active_ingredient?.value || ''
+  if (!activeIng) {
+    const aiMatch = fullMedStr.match(/(?:Sodium Chloride|Paracetamol|Amoxicillin|Domperidone|Ceftriaxone|Azithromycin|Metformin|Pantoprazole|Ibuprofen|Ciprofloxacin|Ondansetron)/i)
+    if (aiMatch) {
+      activeIng = aiMatch[0].trim()
+    } else {
+      const aiEnt = ents.find((e) => e.entity === 'ACTIVE_INGREDIENT')
+      if (aiEnt) activeIng = aiEnt.text
+    }
   }
 
-  let strength = strEnt?.text || ''
+  let strength = primaryMed?.strength?.value || strEnt?.text || ''
   if (!strength) {
     const strMatch = fullMedStr.match(/(\d+(?:\.\d+)?\s*(?:%|mg\/ml|w\/v|mcg\/ml|g\/l|mg|mcg|g)\b|\d+(?:\.\d+)?\s*%)/i)
     if (strMatch) strength = strMatch[1].trim()
   }
 
-  let dosageQty = doseEnt?.text || ''
+  let dosageQty = primaryMed?.dosage_quantity?.value || doseEnt?.text || ''
   if (dosageQty && /\b\d+\s*days?\b/i.test(dosageQty)) {
     dosageQty = ''
   }
   const qtyMatch = dosageQty.match(/\b(\d+(?:,\d+)?(?:\.\d+)?\s*(?:ml|l|mg|mcg|tablets?|capsules?|vials?|units?|bottles?|bags?))\b/i)
   if (qtyMatch) dosageQty = qtyMatch[1].trim()
 
-  let route = ''
+  let route = primaryMed?.route?.value || ''
   const routeMatch = text.match(/\b(IV|IM|SC|oral|PO|topical|sublingual|intravenous|intra-arterial|inhalation)\b/i)
   if (routeMatch) {
     route = routeMatch[1].length <= 3 ? routeMatch[1].toUpperCase() : routeMatch[1].charAt(0).toUpperCase() + routeMatch[1].slice(1).toLowerCase()
@@ -352,7 +612,11 @@ function buildFallbackGroupedInfo(
 
   // 4. Billing Information
   const amtEnt = ents.find((e) => ['CLAIM_AMOUNT', 'INVOICE_TOTAL', 'LINE_AMOUNT', 'TOTAL_AMOUNT'].includes(e.entity))
-  const billedAmt = amtEnt?.text || (sharedContext?.billed_amount ? `₹${sharedContext.billed_amount}` : '')
+  let billedAmt = amtEnt?.text || (sharedContext?.billed_amount ? `₹${sharedContext.billed_amount}` : '')
+  if (!billedAmt) {
+    const gtMatch = text.match(/(?:Grand\s*Total|Total\s*Amount|Total\s*Payable|Invoice\s*Total|Billed\s*Amount|Total)[:\s#]*(?:₹|INR|Rs\.?)?\s*([\d,]+(?:\.\d{2})?)/i)
+    if (gtMatch) billedAmt = `₹${gtMatch[1].trim()}`
+  }
   const invEnt = ents.find((e) => e.entity === 'INVOICE_NUMBER')
   const gstinEnt = ents.find((e) => e.entity === 'GSTIN')
   const hsnEnt = ents.find((e) => e.entity === 'HSN_SAC' && /^\d{4,8}$/.test(e.text.trim()))
@@ -429,6 +693,7 @@ function buildFallbackGroupedInfo(
       duration: duration ? { value: duration, confidence: 0.9, requires_human_review: false } : null,
       instructions: instructions ? { value: instructions, confidence: 0.88, requires_human_review: false } : null,
     },
+    medicines: individualMedicines.length > 0 ? individualMedicines : undefined,
     clinical: {
       encounter_type: encType ? { value: encType, confidence: 0.95, requires_human_review: false } : null,
       length_of_stay: lengthOfStay ? { value: lengthOfStay, confidence: 0.98, requires_human_review: false } : null,
@@ -459,7 +724,7 @@ function buildFallbackGroupedInfo(
   }
 }
 
-function buildFallbackBillingReconciliation(text: string): BillingReconciliationResult | null {
+export function buildFallbackBillingReconciliation(text: string): BillingReconciliationResult | null {
   if (!text) return null
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
   const items: BillingLineItem[] = []
@@ -633,7 +898,6 @@ export function FiveModelsAuditPanel({
   const hasM1 = Boolean(nerEntities && nerEntities.length > 0)
   const hasM2 = Boolean(retrievalPassages && retrievalPassages.length > 0)
   const hasM3 = Boolean(nliResult)
-  const hasM4 = Boolean(providerAnomaly)
   const hasM5 = Boolean(claimAnomaly)
   const hasMed = Boolean(medicineSubstitution)
 
@@ -645,6 +909,8 @@ export function FiveModelsAuditPanel({
     (billingReconciliation && (billingReconciliation.itemized_sum > 0 || billingReconciliation.stated_total != null))
       ? billingReconciliation
       : (buildFallbackBillingReconciliation(sharedContext?.original_text || '') || billingReconciliation || null)
+
+  const hasM4 = Boolean(rec)
 
   const cleanHospitalName = (() => {
     let name = sharedContext?.hospital_name || groupedInfo.hospital.hospital_name?.value || ''
@@ -865,32 +1131,6 @@ export function FiveModelsAuditPanel({
         </div>
       )}
 
-      {/* Human Review Banner if triggered */}
-      {requiresHumanReview && (
-        <div className="p-4 bg-rose-50 border-b border-rose-200 text-rose-950 text-xs">
-          <div className="flex items-start gap-3">
-            <span className="text-lg flex-shrink-0 mt-0.5">⚠️</span>
-            <div className="flex-1 space-y-1">
-              <strong className="text-rose-900 font-bold text-xs uppercase tracking-wide block">
-                Human Review Triggers Detected for Claim {effectiveClaimId}
-              </strong>
-              <p className="text-rose-800 leading-relaxed">
-                One or more integrated AI models or pricing safety rules flagged low prediction confidence, clinical contradiction, or unusual anomaly signals. A clinical claims auditor must manually examine these findings:
-              </p>
-              <ul className="list-disc list-inside mt-2 space-y-1 font-medium text-rose-900 pl-1">
-                {humanReviewReasons.length > 0 ? (
-                  humanReviewReasons.map((reason, idx) => (
-                    <li key={idx} className="leading-snug">{reason}</li>
-                  ))
-                ) : (
-                  <li>Model prediction flagged for supervisory review.</li>
-                )}
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Tab Bar Filter */}
       <div className={`px-6 py-3 border-b flex items-center gap-2 overflow-x-auto text-xs transition-colors ${
         isDark ? 'bg-neutral-900/90 border-neutral-700' : 'bg-cream-100 border-neutral-900'
@@ -987,20 +1227,18 @@ export function FiveModelsAuditPanel({
               : 'text-neutral-800 hover:text-black hover:bg-cream-200'
           }`}
         >
-          <span>M4: Provider Anomaly &amp; Billing Reconciliation</span>
-          {providerAnomaly?.has_sufficient_data || rec ? (
+          <span>M4: Billing Reconciliation</span>
+          {rec ? (
             <span
               className={`w-2 h-2 rounded-full ${
-                providerAnomaly?.is_anomaly || rec?.classification === 'TOTAL_MISMATCH'
+                rec.classification === 'TOTAL_MISMATCH'
                   ? 'bg-rose-500'
-                  : rec?.classification === 'TOTAL_MATCH' || (providerAnomaly?.has_sufficient_data && !providerAnomaly?.is_anomaly)
+                  : rec.classification === 'TOTAL_MATCH'
                   ? 'bg-emerald-500'
                   : 'bg-amber-500'
               }`}
               title={
-                providerAnomaly?.is_anomaly
-                  ? 'Provider Anomaly Detected'
-                  : rec?.classification
+                rec.classification
                   ? `Reconciliation: ${rec.classification}`
                   : 'Evaluated'
               }
@@ -1181,78 +1419,110 @@ export function FiveModelsAuditPanel({
                       </h5>
                     </div>
                     <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-                      Pharmaceutical
+                      {(groupedInfo.medicines && groupedInfo.medicines.length > 1) ? `${groupedInfo.medicines.length} Prescribed Medicines` : 'Pharmaceutical'}
                     </span>
                   </div>
-                  <div className="space-y-2 text-xs">
-                    <div>
-                      <span className="text-slate-400 block text-[10px] uppercase font-semibold">Medicine Name</span>
-                      <div className="flex items-center justify-between gap-1">
-                        <strong className="text-slate-900 font-semibold">{groupedInfo.medicine.medicine_name?.value || 'Not specified'}</strong>
-                        {groupedInfo.medicine.medicine_name?.requires_human_review && (
-                          <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded whitespace-nowrap">
-                            Needs review ({Math.round((groupedInfo.medicine.medicine_name.confidence || 0) * 100)}%)
+
+                  {((groupedInfo.medicines && groupedInfo.medicines.length > 0) ? groupedInfo.medicines : [groupedInfo.medicine]).map((med, idx, arr) => (
+                    <div key={idx} className={`space-y-2 text-xs ${arr.length > 1 ? (idx > 0 ? 'pt-3 border-t border-emerald-100/70' : '') : ''}`}>
+                      {arr.length > 1 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                            Item {idx + 1}
                           </span>
-                        )}
-                      </div>
-                    </div>
-                    {(groupedInfo.medicine.brand_name?.value || groupedInfo.medicine.generic_name?.value) && (
-                      <div className="grid grid-cols-2 gap-2">
-                        {groupedInfo.medicine.brand_name?.value && (
-                          <div>
-                            <span className="text-slate-400 block text-[10px] uppercase font-semibold">Brand</span>
-                            <span className="text-slate-800 font-semibold">{groupedInfo.medicine.brand_name.value}</span>
-                          </div>
-                        )}
-                        {groupedInfo.medicine.generic_name?.value && (
-                          <div>
-                            <span className="text-slate-400 block text-[10px] uppercase font-semibold">Generic</span>
-                            <span className="text-slate-800 font-semibold">{groupedInfo.medicine.generic_name.value}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <div>
-                      <span className="text-slate-400 block text-[10px] uppercase font-semibold">Active Ingredient</span>
-                      <span className="text-slate-700 font-medium">{groupedInfo.medicine.active_ingredient?.value || 'Not specified'}</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
+                          {(med.line_amount?.value || med.unit_price?.value) && (
+                            <span className="font-mono text-[11px] font-semibold text-slate-700">
+                              {med.line_amount?.value ? `Amount: ${med.line_amount.value}` : ''}
+                              {med.unit_price?.value ? ` (${med.unit_price.value} / unit)` : ''}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div>
-                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Strength</span>
-                        <span className="text-slate-800 font-semibold">{groupedInfo.medicine.strength?.value || 'Not specified'}</span>
+                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Medicine Name</span>
+                        <div className="flex items-center justify-between gap-1">
+                          <strong className="text-slate-900 font-semibold">{med.medicine_name?.value || 'Not specified'}</strong>
+                          {med.medicine_name?.requires_human_review && (
+                            <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded whitespace-nowrap">
+                              Needs review ({Math.round((med.medicine_name.confidence || 0) * 100)}%)
+                            </span>
+                          )}
+                        </div>
                       </div>
+                      {(med.brand_name?.value || med.generic_name?.value) && (
+                        <div className="grid grid-cols-2 gap-2">
+                          {med.brand_name?.value && (
+                            <div>
+                              <span className="text-slate-400 block text-[10px] uppercase font-semibold">Brand</span>
+                              <span className="text-slate-800 font-semibold">{med.brand_name.value}</span>
+                            </div>
+                          )}
+                          {med.generic_name?.value && (
+                            <div>
+                              <span className="text-slate-400 block text-[10px] uppercase font-semibold">Generic</span>
+                              <span className="text-slate-800 font-semibold">{med.generic_name.value}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div>
-                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Dosage / Quantity</span>
-                        <span className="text-slate-800 font-semibold">{groupedInfo.medicine.dosage_quantity?.value || 'Not specified'}</span>
+                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Active Ingredient</span>
+                        <span className="text-slate-700 font-medium">{med.active_ingredient?.value || 'Not specified'}</span>
                       </div>
-                      <div>
-                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Route</span>
-                        <span className="text-slate-800 font-semibold">{groupedInfo.medicine.route?.value || 'Not specified'}</span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Strength</span>
+                          <span className="text-slate-800 font-semibold">{med.strength?.value || 'Not specified'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Dosage / Quantity</span>
+                          <span className="text-slate-800 font-semibold">{med.dosage_quantity?.value || 'Not specified'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Route</span>
+                          <span className="text-slate-800 font-semibold">{med.route?.value || 'Not specified'}</span>
+                        </div>
                       </div>
+                      {(med.unit_price?.value || med.line_amount?.value) && (
+                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                          {med.unit_price?.value && (
+                            <div>
+                              <span className="text-slate-400 block text-[10px] uppercase font-semibold">Unit Price</span>
+                              <span className="font-mono text-slate-800 font-semibold">{med.unit_price.value}</span>
+                            </div>
+                          )}
+                          {med.line_amount?.value && (
+                            <div>
+                              <span className="text-slate-400 block text-[10px] uppercase font-semibold">Line Amount</span>
+                              <span className="font-mono text-slate-800 font-semibold">{med.line_amount.value}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {(med.frequency?.value || med.duration?.value) && (
+                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                          {med.frequency?.value && (
+                            <div>
+                              <span className="text-slate-400 block text-[10px] uppercase font-semibold">Frequency</span>
+                              <span className="text-slate-800 font-semibold">{med.frequency.value}</span>
+                            </div>
+                          )}
+                          {med.duration?.value && (
+                            <div>
+                              <span className="text-slate-400 block text-[10px] uppercase font-semibold">Duration</span>
+                              <span className="text-slate-800 font-semibold">{med.duration.value}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {med.instructions?.value && (
+                        <div className="pt-1 border-t border-slate-100">
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Instructions</span>
+                          <span className="text-slate-700 font-medium">{med.instructions.value}</span>
+                        </div>
+                      )}
                     </div>
-                    {(groupedInfo.medicine.frequency?.value || groupedInfo.medicine.duration?.value) && (
-                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
-                        {groupedInfo.medicine.frequency?.value && (
-                          <div>
-                            <span className="text-slate-400 block text-[10px] uppercase font-semibold">Frequency</span>
-                            <span className="text-slate-800 font-semibold">{groupedInfo.medicine.frequency.value}</span>
-                          </div>
-                        )}
-                        {groupedInfo.medicine.duration?.value && (
-                          <div>
-                            <span className="text-slate-400 block text-[10px] uppercase font-semibold">Duration</span>
-                            <span className="text-slate-800 font-semibold">{groupedInfo.medicine.duration.value}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {groupedInfo.medicine.instructions?.value && (
-                      <div className="pt-1 border-t border-slate-100">
-                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Instructions</span>
-                        <span className="text-slate-700 font-medium">{groupedInfo.medicine.instructions.value}</span>
-                      </div>
-                    )}
-                  </div>
+                  ))}
                 </div>
 
                 {/* 3. Clinical Information */}
@@ -1344,7 +1614,11 @@ export function FiveModelsAuditPanel({
                       <span className="text-slate-400 block text-[10px] uppercase font-semibold">Billed Amount</span>
                       <div className="flex items-center justify-between">
                         <strong className="text-base font-bold text-slate-900">
-                          {groupedInfo.billing.billed_amount?.value || 'Not specified'}
+                          {groupedInfo.billing.billed_amount?.value ||
+                            (billingReconciliation?.stated_total ? `₹${billingReconciliation.stated_total}` : null) ||
+                            (billingReconciliation?.itemized_sum ? `₹${billingReconciliation.itemized_sum}` : null) ||
+                            (sharedContext?.billed_amount ? `₹${sharedContext.billed_amount}` : null) ||
+                            'Not specified'}
                         </strong>
                         {groupedInfo.billing.billed_amount?.requires_human_review && (
                           <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded">
@@ -1353,6 +1627,14 @@ export function FiveModelsAuditPanel({
                         )}
                       </div>
                     </div>
+                    {(groupedInfo.billing.subtotal?.value || billingReconciliation?.itemized_sum) && (
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                        <span className="text-slate-400 text-[10px] uppercase font-semibold">Subtotal</span>
+                        <span className="font-mono text-slate-800 font-semibold">
+                          {groupedInfo.billing.subtotal?.value || `₹${billingReconciliation?.itemized_sum}`}
+                        </span>
+                      </div>
+                    )}
                     {(groupedInfo.billing.claimed_amount?.value || groupedInfo.billing.approved_amount?.value) && (
                       <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
                         {groupedInfo.billing.claimed_amount?.value && (
@@ -1765,233 +2047,14 @@ export function FiveModelsAuditPanel({
           ) : null
         )}
 
-        {/* MODEL 4: Provider-Level Anomaly Screening */}
-        {(activeTab === 'all' || activeTab === 'm4') && (
-          <div className="p-5 rounded-xl border border-amber-200 bg-amber-50/20 space-y-4 shadow-2xs">
-            {/* Clean Professional Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-100 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-mono text-[10px] font-bold uppercase">
-                  Model 4
-                </span>
-                <h4 className="text-sm font-bold text-slate-900">
-                  Provider Billing Pattern Analysis
-                </h4>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {providerAnomaly?.has_sufficient_data ? (
-                  <span
-                    className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border shadow-2xs flex items-center gap-1.5 ${
-                      providerAnomaly.is_anomaly || providerAnomaly.decision === 'ANOMALOUS'
-                        ? 'bg-rose-100 text-rose-800 border-rose-300'
-                        : 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                    }`}
-                  >
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        providerAnomaly.is_anomaly || providerAnomaly.decision === 'ANOMALOUS'
-                          ? 'bg-rose-500'
-                          : 'bg-emerald-500'
-                      }`}
-                    />
-                    {providerAnomaly.is_anomaly || providerAnomaly.decision === 'ANOMALOUS'
-                      ? 'ANOMALOUS PRACTICE'
-                      : 'NORMAL PRACTICE'}
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-semibold text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full border border-amber-300 shadow-2xs flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                    INSUFFICIENT DATA
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Context Strip */}
-            <div className={`p-2.5 rounded-lg border text-[11px] flex flex-col sm:flex-row justify-between gap-2 ${
-              isDark ? 'bg-neutral-900 border-neutral-700 text-neutral-300' : 'bg-white border-amber-100 text-slate-600'
-            }`}>
-              <div>
-                <strong className={isDark ? 'text-neutral-100' : 'text-slate-800'}>Target Provider:</strong>{' '}
-                {sharedContext?.hospital_name || groupedInfo.hospital.hospital_name?.value || 'Provider identity unavailable'}
-              </div>
-              <div>
-                <strong className={isDark ? 'text-neutral-100' : 'text-slate-800'}>Audit Scope:</strong> Historical Billing Volume &amp; Practice Patterns
-              </div>
-            </div>
-
-            {/* Provider Anomaly 1-Sentence Overview */}
-            <div className={`p-3 border rounded-lg text-xs leading-relaxed flex items-start gap-2.5 shadow-2xs ${
-              isDark ? 'bg-amber-950/30 border-amber-800/50 text-amber-200' : 'bg-amber-50/80 border-amber-200 text-amber-950'
-            }`}>
-              <span className="text-sm shrink-0 mt-0.5">ℹ️</span>
-              <p>
-                <strong>Provider Anomaly:</strong> Evaluates a healthcare facility's aggregated billing volumes, charge markups, and clinical practice patterns against regional benchmarks to detect statistical anomalies and outlier behavior without presuming intentional fraud.
-              </p>
-            </div>
-
-            {/* Main Auditor View */}
-            {providerAnomaly?.has_sufficient_data ? (
-              <div className={`p-4 rounded-xl border shadow-xs space-y-3 ${
-                isDark ? 'bg-neutral-900 border-neutral-700' : 'bg-white border-amber-100'
-              }`}>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Provider Name</span>
-                    <strong className={`font-semibold truncate block ${isDark ? 'text-neutral-100' : 'text-slate-900'}`}>
-                      {sharedContext?.hospital_name || groupedInfo.hospital.hospital_name?.value || 'Provider identity unavailable'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Assessment Status</span>
-                    <span className={`font-semibold ${isDark ? 'text-neutral-200' : 'text-slate-800'}`}>
-                      {providerAnomaly.decision || (providerAnomaly.is_anomaly ? 'ANOMALOUS' : 'NORMAL')}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Anomaly Finding</span>
-                    <span className={`font-semibold ${providerAnomaly.is_anomaly ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                      {providerAnomaly.is_anomaly ? 'Variance Detected' : 'Standard Practice'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Audit Recommendation</span>
-                    <span className={`font-semibold ${providerAnomaly.is_anomaly ? 'text-amber-600 dark:text-amber-400' : isDark ? 'text-neutral-300' : 'text-slate-700'}`}>
-                      {providerAnomaly.is_anomaly ? 'Manual Chart Review' : 'Standard Processing'}
-                    </span>
-                  </div>
-                </div>
-
-                {providerAnomaly.explanations && providerAnomaly.explanations.length > 0 && (
-                  <div className="pt-2 border-t border-slate-100 space-y-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                      Important Detected Billing-Pattern Indicators
-                    </span>
-                    <ul className="list-disc list-inside space-y-1 text-slate-700 text-xs">
-                      {providerAnomaly.explanations.map((exp, idx) => (
-                        <li key={idx} className="leading-snug">{exp}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 text-[11px] text-slate-600 flex items-center gap-2">
-                  <span className="font-semibold text-slate-700">Auditor Explanation:</span>
-                  <span>{providerAnomaly.disclaimer || 'Provider billing profile screened against normative practice ratios.'}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="p-4 bg-white rounded-xl border border-amber-200/80 shadow-xs space-y-3">
-                <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-lg shrink-0">
-                    📋
-                  </div>
-                  <div className="flex-1 space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <h5 className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                        INSUFFICIENT DATA
-                      </h5>
-                      <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                        Provider History Required
-                      </span>
-                    </div>
-                    <p className="text-xs font-semibold text-slate-800 leading-snug">
-                      {providerAnomaly?.explanations?.[0] || 'Provider history is required to evaluate historical billing patterns.'}
-                    </p>
-                    <p className="text-[11px] text-slate-600 leading-relaxed">
-                      {providerAnomaly?.explanations?.[1] ? (
-                        providerAnomaly.explanations[1].replace(/EE MEDICAL INSTITUTE/gi, sharedContext?.hospital_name || 'the facility')
-                      ) : (
-                        <>Model 4 evaluates aggregated provider practice patterns across historical billing distributions. Because this uploaded document represents a single patient encounter at <strong>{sharedContext?.hospital_name || groupedInfo.hospital.hospital_name?.value || 'the facility'}</strong>, multi-claim historical provider volume is not attached.</>
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 text-[11px] text-slate-600 flex items-center gap-2">
-                  <span className="font-semibold text-slate-700">Auditor Action:</span>
-                  <span>Per clinical auditing safety protocol, provider scoring is withheld rather than computed from incomplete historical data. No provider-level penalty is applied.</span>
-                </div>
-              </div>
-            )}
-
-            {/* Technical Details & Audit Trace Toggle */}
-            <div className="pt-2 border-t border-amber-100/60">
-              <button
-                type="button"
-                onClick={() => setShowRawM4Trace(!showRawM4Trace)}
-                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-amber-800 transition-colors"
-              >
-                <span>{showRawM4Trace ? '▼' : '▶'}</span>
-                <span>{showRawM4Trace ? 'Hide' : 'View'} Technical Details &amp; Audit Trace</span>
-                <span className="text-[10px] text-slate-400">(Raw score, 9 Medicare feature metrics, model flags)</span>
-              </button>
-
-              {showRawM4Trace && (
-                <div className="mt-2.5 p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-3 text-xs">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] bg-white p-2.5 rounded border border-slate-200">
-                    <div>
-                      <span className="text-slate-400 block font-sans text-[10px] uppercase font-bold">Model Version:</span>
-                      <span className="text-slate-800 font-semibold font-mono">{providerAnomaly?.model_version || 'Isolation Forest V3'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block font-sans text-[10px] uppercase font-bold">Raw Anomaly Score:</span>
-                      <span className="text-slate-900 font-bold font-mono">
-                        {providerAnomaly?.anomaly_score !== undefined ? providerAnomaly.anomaly_score.toFixed(4) : 'N/A'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block font-sans text-[10px] uppercase font-bold">Decision Flag:</span>
-                      <span className="text-slate-800 font-semibold font-mono">{providerAnomaly?.decision || providerAnomaly?.screening_flag || 'None'}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block font-sans text-[10px] uppercase font-bold">Data Status:</span>
-                      <span className="text-slate-800 font-semibold font-mono">{providerAnomaly?.has_sufficient_data ? 'SUFFICIENT' : 'INSUFFICIENT'}</span>
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-2">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                      Evaluated Provider Historical Metrics (9 Features)
-                    </span>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-[11px]">
-                      {[
-                        { key: 'Tot_Benes', label: 'Tot_Benes' },
-                        { key: 'Tot_Srvcs', label: 'Tot_Srvcs' },
-                        { key: 'Avg_Sbmtd_Chrg', label: 'Avg_Sbmtd_Chrg' },
-                        { key: 'Avg_Mdcr_Alowd_Amt', label: 'Avg_Mdcr_Alowd_Amt' },
-                        { key: 'Avg_Mdcr_Pymt_Amt', label: 'Avg_Mdcr_Pymt_Amt' },
-                        { key: 'Avg_Mdcr_Stdzd_Amt', label: 'Avg_Mdcr_Stdzd_Amt' },
-                        { key: 'Submitted_To_Allowed_Ratio', label: 'Submitted_To_Allowed_Ratio' },
-                        { key: 'Allowed_To_Payment_Ratio', label: 'Allowed_To_Payment_Ratio' },
-                        { key: 'Services_Per_Beneficiary', label: 'Services_Per_Beneficiary' },
-                      ].map(({ key, label }) => {
-                        const val = providerAnomaly?.features_used?.[key]
-                        const displayVal = val !== undefined && val !== null ? String(val) : (providerAnomaly?.has_sufficient_data ? 'N/A' : 'Unavailable (Single Claim)')
-                        return (
-                          <div key={key} className="p-1.5 rounded bg-slate-50 border border-slate-100 flex flex-col">
-                            <span className="text-[10px] text-slate-500 font-sans">{label}</span>
-                            <span className="text-slate-800 font-bold truncate">{displayVal}</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* DEDICATED CLAIM-LEVEL BILLING RECONCILIATION & ACCOUNTING INTEGRITY */}
+        {/* MODEL 4: Claim-Level Billing Reconciliation & Accounting Integrity */}
         {(activeTab === 'all' || activeTab === 'm4' || activeTab === 'rec') && (
           <div className="p-5 rounded-xl border border-blue-200 bg-blue-50/20 space-y-4 shadow-2xs">
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 pb-3">
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-mono text-[10px] font-bold uppercase">
-                  Reconciliation
+                  Model 4
                 </span>
                 <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <span>Claim-Level Billing Reconciliation &amp; Accounting Integrity</span>

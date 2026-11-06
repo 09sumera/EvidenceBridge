@@ -42,7 +42,7 @@ Generates an optimized static bundle in `frontend/dist/`.
 |---|---|---|
 | `/` | **Audit / Extract** | Paste raw clinical notes, hospital bills, or patient posts. Run extraction + verification in one click with instant verdict, cost anomaly alerts, and support score bars. Pre-load sample bills with a single button. |
 | `/claims` | **Claims Explorer** | Browse and filter all stored claims. Filter by action (`ACCEPT`, `FLAG`, `ABSTAIN`), cost anomalies only, or geographic locality. Paginated list with direct detail links. |
-| `/claims/:claimId` | **Claim Detail &amp; Audit Trail** | Deep audit view. Inspect original verbatim text, cryptographic SHA-256 provenance hash, extracted fields, guideline verification verdict, evidence passages with relevance bars, and the full interactive **7-Stage Decision Audit Graph**. Trigger re-verification on demand. |
+| `/claims/:claimId` | **Claim Detail &amp; Audit Trail** | Deep audit view. Inspect original verbatim text, cryptographic SHA-256 provenance hash, extracted fields, guideline verification verdict, evidence passages with relevance bars, and the full interactive **9-Stage Decision Audit Graph**. Trigger re-verification on demand. |
 | `/trust-density` | **Hyperlocal Trust Density** | Metropolitan reliability dashboard. Search canonical location keys (e.g. `houston_tx`, `chicago_il`) to view composite density scores, anomaly rates, time-decay volume, top anomalous procedure tags, and auditable narrative insights. |
 
 ---
@@ -54,5 +54,5 @@ Generates an optimized static bundle in `frontend/dist/`.
 - [ ] Home: Click "Try a sample hospital bill" &rarr; click "Extract &amp; Verify Claim" &rarr; verify result card appears
 - [ ] Claims: Navigate to `/claims`, verify claims load with badges
 - [ ] Claims: Toggle filter to "Flag" or check "Cost Anomalies Only" &rarr; verify list filters correctly
-- [ ] Claim Detail: Click any claim &rarr; verify verbatim text, SHA-256 copy button, and 7-stage audit timeline render
+- [ ] Claim Detail: Click any claim &rarr; verify verbatim text, SHA-256 copy button, and 9-stage audit timeline render
 - [ ] Trust Density: Navigate to `/trust-density` &rarr; click `houston_tx` &rarr; verify composite score bar, metrics grid, and insight card render

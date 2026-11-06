@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { formatCurrency } from '../utils/currency'
 import {
   API_BASE,
@@ -1018,8 +1019,28 @@ export function HospitalAvailabilityBadge({
 }
 
 export function HospitalFinder() {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const isHospitalStaff = user?.portal === 'hospital_management'
+
+  const handleCheckHospital = (hosp: any) => {
+    const hospData = {
+      id: hosp.id,
+      name: hosp.name,
+      district: hosp.district || 'Karnataka',
+      address: hosp.address || `${hosp.name}, ${hosp.district || 'Karnataka'}`,
+      phone: hosp.phone || hosp.mobile || '+91 80 2502 4444',
+      emergency_helpline: hosp.emergency_helpline || hosp.emergency_services || '108 / 112',
+    }
+    try {
+      localStorage.setItem('eb_active_management_hospital', JSON.stringify(hospData))
+    } catch {
+      // ignore
+    }
+    navigate(`/hospital/management?hospital_id=${encodeURIComponent(hosp.id)}&mode=read_only`, {
+      state: { hospital: hospData, mode: 'read_only' },
+    })
+  }
 
   // Navigation Tab: 'facilities' (GPS Nearby & Registry), 'cost_comparison' (Stage 3), 'schemes' (Stage 4B), 'manage_availability', 'emergency_sos'
   const [activeTab, setActiveTab] = useState<'facilities' | 'cost_comparison' | 'schemes' | 'manage_availability' | 'emergency_sos'>(
@@ -1249,11 +1270,15 @@ export function HospitalFinder() {
     setIsSubmittingSos(true)
     setSosError(null)
     try {
-      const targetHosp = MANAGED_HOSPITALS.find((h) => h.id === sosTargetHospitalId)
+      const targetHosp =
+        searchResponse?.hospitals.find((h) => h.id === sosTargetHospitalId) ||
+        MANAGED_HOSPITALS.find((h) => h.id === sosTargetHospitalId)
+
+      const hospName = targetHosp?.name || sosTargetHospitalId
       const record = await createEmergencySOS({
         emergency_type: sosEmergencyType,
         hospital_id: sosTargetHospitalId,
-        hospital_name: targetHosp?.name || sosTargetHospitalId,
+        hospital_name: hospName,
         patient_name: sosPatientName.trim(),
         patient_phone: sosPatientPhone.trim(),
         description: sosDescription.trim() || undefined,
@@ -1261,6 +1286,16 @@ export function HospitalFinder() {
         longitude: sosCoords?.lon,
         address: locationLabel || undefined,
       })
+
+      // Sync to local emergency dispatch store for instant multi-hospital isolation
+      try {
+        const stored = JSON.parse(localStorage.getItem('eb_emergency_sos_records') || '[]')
+        const updated = [record, ...stored.filter((r: any) => r.sos_id !== record.sos_id)]
+        localStorage.setItem('eb_emergency_sos_records', JSON.stringify(updated))
+      } catch {
+        // ignore
+      }
+
       setActiveSosTracking(record)
     } catch (e: any) {
       setSosError(e?.message || 'Failed to dispatch SOS alert. Please call 112 directly.')
@@ -2931,18 +2966,32 @@ export function HospitalFinder() {
                         </button>
                       </div>
 
-                      {hosp.directions_url && (
-                        <a
-                          href={hosp.directions_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold transition-colors flex items-center gap-1 shrink-0 shadow-xs"
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {hosp.directions_url && (
+                          <a
+                            href={hosp.directions_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold transition-colors flex items-center gap-1 shadow-xs"
+                          >
+                            <span>🧭</span>
+                            <span>Directions</span>
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleCheckHospital(hosp)
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
+                          title={`Check staff capacity, beds, and SOS emergency desk for ${hosp.name}`}
                         >
-                          <span>🧭</span>
-                          <span>Directions</span>
-                        </a>
-                      )}
+                          <span>📋</span>
+                          <span>Check</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )
@@ -3258,18 +3307,32 @@ export function HospitalFinder() {
                         </button>
                       </div>
 
-                      {hosp.directions_url && (
-                        <a
-                          href={hosp.directions_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold transition-colors flex items-center gap-1"
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {hosp.directions_url && (
+                          <a
+                            href={hosp.directions_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="px-3.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold transition-colors flex items-center gap-1 shadow-xs"
+                          >
+                            <span>🧭</span>
+                            <span>Directions</span>
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleCheckHospital(hosp)
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-black transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
+                          title={`Check staff capacity, beds, and SOS emergency desk for ${hosp.name}`}
                         >
-                          <span>🧭</span>
-                          <span>Directions</span>
-                        </a>
-                      )}
+                          <span>📋</span>
+                          <span>Check</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )

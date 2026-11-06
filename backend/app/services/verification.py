@@ -80,6 +80,32 @@ ANATOMICAL_REGIONS: dict[str, set[str]] = {
     "spine": {"spine", "spinal", "lumbar", "cervical", "vertebra"},
 }
 
+STOP_WORDS: set[str] = {
+    "mg", "ml", "oral", "tablet", "tablets", "solution", "daily", "the", "and", "for",
+    "with", "cpt", "dose", "unit", "iv", "intravenous", "infusion", "injection",
+    "capsule", "vial", "per", "take", "twice", "once", "thrice", "after", "before",
+    "meals", "breakfast", "night", "morning", "one", "two", "three", "days"
+}
+
+CLINICAL_SYNONYMS: dict[str, set[str]] = {
+    "paracetamol": {"acetaminophen", "dolo", "crocin", "calpol", "tylenol", "antipyretic", "fever", "febrile", "pyrexia"},
+    "acetaminophen": {"paracetamol", "dolo", "crocin", "antipyretic", "fever", "febrile", "pyrexia"},
+    "dolo": {"paracetamol", "acetaminophen", "dolo 650", "fever", "febrile"},
+    "saline": {"sodium", "chloride", "nacl", "crystalloid", "hydration", "fluid"},
+    "sodium": {"saline", "sodium chloride", "nacl"},
+    "chloride": {"saline", "sodium chloride", "nacl"},
+    "metformin": {"glucophage", "biguanide", "glycomet", "diabetes", "glycemic"},
+    "glimepiride": {"amaryl", "sulfonylurea", "diabetes", "glycemic", "antidiabetic"},
+    "atorvastatin": {"statin", "lipitor", "cholesterol", "dyslipidemia", "lipid", "cardiovascular"},
+    "ors": {"oral rehydration solution", "oral rehydration salts", "rehydration", "diarrhea"},
+    "rehydration": {"ors", "oral rehydration solution", "dehydration", "gastroenteritis", "saline"},
+    "gastroenteritis": {"dehydration", "diarrhea", "vomiting", "rehydration", "saline"},
+    "fever": {"paracetamol", "acetaminophen", "antipyretic", "febrile", "pyrexia"},
+    "febrile": {"paracetamol", "acetaminophen", "fever", "pyrexia", "antipyretic"},
+    "hypertension": {"blood pressure", "amlodipine", "telmisartan", "antihypertensive"},
+    "pantoprazole": {"pan", "pantocid", "ppi", "proton pump", "gastritis", "gerd", "acid reflux"},
+}
+
 
 
 class VerificationService:
@@ -266,32 +292,9 @@ class VerificationService:
         # Clean entity-targeted retrieval query to avoid full-document contamination
         entity_clean = entity.strip()
         query_text = f"{entity_clean} clinical guideline indication dosage".strip()
-        stop_words = {
-            "mg", "ml", "oral", "tablet", "tablets", "solution", "daily", "the", "and", "for",
-            "with", "cpt", "dose", "unit", "iv", "intravenous", "infusion", "injection",
-            "capsule", "vial", "per", "take", "twice", "once", "thrice", "after", "before",
-            "meals", "breakfast", "night", "morning", "one", "two", "three", "days"
-        }
-        all_tokens = [t.lower() for t in re.findall(r"\w+", f"{entity_clean} {claim_text[:120]}") if len(t) >= 3 and t.lower() not in stop_words]
-        entity_tokens = set(re.findall(r"\w+", entity_clean.lower())) - stop_words
+        all_tokens = [t.lower() for t in re.findall(r"\w+", f"{entity_clean} {claim_text[:120]}") if len(t) >= 3 and t.lower() not in STOP_WORDS]
+        entity_tokens = set(re.findall(r"\w+", entity_clean.lower())) - STOP_WORDS
 
-        # Clinical synonym mapping (bridges Indian brand/generic formulations to standard monographs)
-        CLINICAL_SYNONYMS: dict[str, set[str]] = {
-            "paracetamol": {"acetaminophen", "dolo", "crocin", "calpol", "tylenol", "antipyretic", "fever"},
-            "acetaminophen": {"paracetamol", "dolo", "crocin", "antipyretic", "fever"},
-            "dolo": {"paracetamol", "acetaminophen", "dolo 650", "fever"},
-            "saline": {"sodium", "chloride", "nacl", "crystalloid", "hydration", "fluid"},
-            "sodium": {"saline", "sodium chloride", "nacl"},
-            "chloride": {"saline", "sodium chloride", "nacl"},
-            "metformin": {"glucophage", "biguanide", "glycomet", "diabetes", "glycemic"},
-            "glimepiride": {"amaryl", "sulfonylurea", "diabetes", "glycemic", "antidiabetic"},
-            "atorvastatin": {"statin", "lipitor", "cholesterol", "dyslipidemia", "lipid", "cardiovascular"},
-            "ors": {"oral rehydration solution", "oral rehydration salts", "rehydration", "diarrhea"},
-            "rehydration": {"ors", "oral rehydration solution", "dehydration", "gastroenteritis", "saline"},
-            "gastroenteritis": {"dehydration", "diarrhea", "vomiting", "rehydration", "saline"},
-            "fever": {"paracetamol", "acetaminophen", "antipyretic", "febrile"},
-            "hypertension": {"blood pressure", "amlodipine", "telmisartan", "antihypertensive"},
-        }
         expanded_entity_tokens = set(entity_tokens)
         for t in entity_tokens:
             if t in CLINICAL_SYNONYMS:
@@ -478,23 +481,35 @@ class VerificationService:
         except Exception as e:
             logger.debug(f"Failed to generate grouped medical information: {e}")
 
+        NON_CLINICAL_WORDS = {
+            "hospital", "clinic", "multispeciality", "institute", "center", "centre",
+            "healthcare", "health", "system", "nursing", "department", "ward",
+            "invoice", "bill", "prescription", "patient", "dr.", "doctor"
+        }
+
         entity = claim.extracted_fields.entity
-        # Enrich generic or fragmented extracted entity from shared context clinical items
-        is_generic_or_fragment = bool(
+        valid_diags = [d for d in shared_context.diagnoses if len(d.strip()) >= 3 and not d.strip().isdigit() and d.lower() not in ("february", "january", "march", "no", "yes")]
+        valid_meds = [m for m in shared_context.medicines if len(m.strip()) >= 3 and not m.strip().isdigit() and not re.search(r"\b\d+\s*days?\b", m, re.I)]
+        valid_procs = [p for p in shared_context.procedures if len(p.strip()) >= 3 and not p.strip().isdigit()]
+
+        is_generic_or_facility = bool(
             not entity
             or len(entity.strip()) <= 3
             or entity.strip().isdigit()
             or re.fullmatch(r"[\W\d_]+", entity.strip())
             or entity in ("Clinical Claim", "Patient", "Treatment", "Medical Record")
+            or any(w in entity.lower() for w in NON_CLINICAL_WORDS)
+            or (shared_context.hospital_name and entity.strip().lower() == shared_context.hospital_name.strip().lower())
+            or (shared_context.patient_info and entity.strip().lower() == str(shared_context.patient_info.get("name", "")).strip().lower())
         )
-        if is_generic_or_fragment:
-            valid_diags = [d for d in shared_context.diagnoses if len(d.strip()) >= 4 and not d.strip().isdigit() and d.lower() not in ("february", "january", "march", "no", "yes")]
-            valid_meds = [m for m in shared_context.medicines if len(m.strip()) >= 4 and not m.strip().isdigit() and not re.search(r"\b\d+\s*days?\b", m, re.I)]
-            valid_procs = [p for p in shared_context.procedures if len(p.strip()) >= 3 and not p.strip().isdigit()]
-            if valid_diags:
-                entity = valid_diags[0]
-            elif valid_meds:
+
+        if target_medicine:
+            entity = target_medicine
+        elif is_generic_or_facility:
+            if valid_meds:
                 entity = valid_meds[0]
+            elif valid_diags:
+                entity = valid_diags[0]
             elif valid_procs:
                 entity = valid_procs[0]
 
@@ -503,19 +518,23 @@ class VerificationService:
         # 1. Retrieve hybrid evidence passages (with scores and discard reasons)
         passages = self.retrieve_hybrid_passages(entity, claim.original_text, k=5)
         usable_passages = [p for p in passages if p.used_in_decision]
-        shared_context.retrieved_passages_count = len(usable_passages)
 
-        # Map to backwards-compatible snippets
-        snippets = [
-            EvidenceSnippet(
-                guideline_id=p.guideline_id or "UNKNOWN",
-                title=p.title,
-                source=p.source,
-                text=p.text,
-                relevance_score=p.relevance_score
-            )
-            for p in usable_passages
-        ]
+        # Clinical fallback: if primary entity retrieval yielded no usable passages, try top medicine or diagnosis
+        if not usable_passages:
+            fallback_candidates = [m for m in valid_meds if m.lower() != entity.lower()] + [d for d in valid_diags if d.lower() != entity.lower()]
+            for alt in fallback_candidates:
+                alt_passages = self.retrieve_hybrid_passages(alt, claim.original_text, k=3)
+                alt_usable = [p for p in alt_passages if p.used_in_decision]
+                if alt_usable:
+                    usable_passages = alt_usable
+                    existing_ids = {p.guideline_id for p in passages}
+                    for ap in alt_passages:
+                        if ap.guideline_id not in existing_ids:
+                            passages.append(ap)
+                    entity = alt
+                    break
+
+        shared_context.retrieved_passages_count = len(usable_passages)
 
         # 3. Model 3: DeBERTa NLI Cross-Examination with Strict Entity-Identity Validation Guard
         nli_result = None
@@ -524,16 +543,23 @@ class VerificationService:
             from app.services.nli import nli_service
 
             # STRICT ENTITY-IDENTITY VALIDATION GUARD
-            # Ensure top guideline actually addresses the target claim entity (e.g. Metformin != Atorvastatin)
+            # Ensure top guideline actually addresses the target claim entity
             verified_usable_passages: list[EvidencePassage] = []
-            entity_words = [w for w in re.findall(r"[a-z]{3,}", entity.lower()) if w not in stop_words]
+            entity_words = [w for w in re.findall(r"[a-z]{3,}", entity.lower()) if w not in STOP_WORDS]
+            clinical_claim_words = set(entity_words)
+            for m in valid_meds:
+                clinical_claim_words.update(re.findall(r"[a-z]{3,}", m.lower()))
+            for d in valid_diags:
+                clinical_claim_words.update(re.findall(r"[a-z]{3,}", d.lower()))
+            clinical_claim_words = {w for w in clinical_claim_words if w not in STOP_WORDS}
+
+            syns = set(clinical_claim_words)
+            for w in clinical_claim_words:
+                if w in CLINICAL_SYNONYMS:
+                    syns.update(CLINICAL_SYNONYMS[w])
+
             for p in usable_passages:
                 g_text = f"{p.title} {p.text}".lower()
-                # Check direct or synonym match
-                syns = set(entity_words)
-                for w in entity_words:
-                    if w in CLINICAL_SYNONYMS:
-                        syns.update(CLINICAL_SYNONYMS[w])
                 matches_entity = any(w in g_text for w in syns) if syns else True
                 if matches_entity:
                     verified_usable_passages.append(p)
@@ -542,8 +568,34 @@ class VerificationService:
                     p.used_in_decision = False
                     p.discard_reason = f"Entity-Identity mismatch: Guideline does not cover target entity '{entity}'."
 
+            # If guard rejected all, but we have valid_meds, try direct lookup with medicines
+            if not verified_usable_passages and valid_meds:
+                for med_alt in valid_meds:
+                    alt_passages = self.retrieve_hybrid_passages(med_alt, claim.original_text, k=3)
+                    for ap in alt_passages:
+                        if ap.used_in_decision:
+                            ag_text = f"{ap.title} {ap.text}".lower()
+                            if any(w in ag_text for w in syns) or any(w in ag_text for w in re.findall(r"[a-z]{3,}", med_alt.lower())):
+                                verified_usable_passages.append(ap)
+                                if ap.guideline_id not in {p.guideline_id for p in passages}:
+                                    passages.append(ap)
+                    if verified_usable_passages:
+                        break
+
             usable_passages = verified_usable_passages
             shared_context.retrieved_passages_count = len(usable_passages)
+
+            # Map to backwards-compatible snippets from verified usable passages
+            snippets = [
+                EvidenceSnippet(
+                    guideline_id=p.guideline_id or "UNKNOWN",
+                    title=p.title,
+                    source=p.source,
+                    text=p.text,
+                    relevance_score=p.relevance_score
+                )
+                for p in usable_passages
+            ]
 
             if usable_passages:
                 top_p = usable_passages[0]
@@ -555,7 +607,19 @@ class VerificationService:
                 elif nli_result.requires_human_review:
                     human_review_reasons.append(f"Model 3 DeBERTa NLI confidence ({nli_result.confidence:.2f}) requires human review.")
         except Exception as nli_err:
-            logger.debug(f"Model 3 DeBERTa NLI evaluation skipped or failed: {nli_err}")
+            logger.error(f"Model 3 DeBERTa NLI evaluation error: {nli_err}", exc_info=True)
+
+        if "snippets" not in locals():
+            snippets = [
+                EvidenceSnippet(
+                    guideline_id=p.guideline_id or "UNKNOWN",
+                    title=p.title,
+                    source=p.source,
+                    text=p.text,
+                    relevance_score=p.relevance_score
+                )
+                for p in usable_passages
+            ]
 
         # 4. Model 4: Provider-Level Anomaly Screening (Isolation Forest V3)
         provider_anomaly_res = None

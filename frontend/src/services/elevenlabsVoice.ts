@@ -32,21 +32,180 @@ export class ElevenLabsVoiceEngine {
   private options: ElevenLabsVoiceOptions = {}
   private transcriptDebounceTimer: any = null
   private latestTranscript = ''
+  private activeAudioElement: HTMLAudioElement | null = null
 
   constructor() {
     this.audioQueue = []
   }
 
   /**
-   * Check if ElevenLabs Agent ID is configured
+   * Get ElevenLabs API Key (sk_...) from environment
+   */
+  public static getApiKey(): string {
+    const envKey = (import.meta as any).env?.VITE_ELEVENLABS_API_KEY
+    if (envKey && typeof envKey === 'string' && envKey.trim() && !envKey.includes('placeholder')) {
+      return envKey.trim()
+    }
+    const envAgentId = (import.meta as any).env?.VITE_ELEVENLABS_AGENT_ID
+    if (envAgentId && typeof envAgentId === 'string' && envAgentId.startsWith('sk_')) {
+      return envAgentId.trim()
+    }
+    return ''
+  }
+
+  /**
+   * Check if ElevenLabs Agent ID is configured (must not be an sk_ API key)
    */
   public static getAgentId(): string {
     const envAgentId = (import.meta as any).env?.VITE_ELEVENLABS_AGENT_ID
-    if (envAgentId && typeof envAgentId === 'string' && envAgentId.trim() && !envAgentId.includes('placeholder')) {
+    if (
+      envAgentId &&
+      typeof envAgentId === 'string' &&
+      envAgentId.trim() &&
+      !envAgentId.startsWith('sk_') &&
+      !envAgentId.includes('placeholder')
+    ) {
       return envAgentId.trim()
     }
-    // Return empty if not yet provided by the user
     return ''
+  }
+
+  /**
+   * Speak text using ElevenLabs REST TTS API with browser Web Speech synthesis fallback
+   */
+  public async speakText(
+    text: string,
+    language: 'en' | 'kn' = 'en',
+    voiceId = 'pNInz6obpgDQGcFmaJgB'
+  ): Promise<boolean> {
+    const cleanText = (text || '').trim()
+    if (!cleanText) return false
+
+    this.stopAudioPlayback()
+    const apiKey = ElevenLabsVoiceEngine.getApiKey()
+
+    // Default to 'pNInz6obpgDQGcFmaJgB' (Adam) which is supported on both Free and Paid ElevenLabs tiers
+    // Avoid '21m00Tcm4TlvDq8ikWAM' (Rachel) which throws 402 Payment Required for free accounts
+    const effectiveVoiceId =
+      voiceId && voiceId !== '21m00Tcm4TlvDq8ikWAM' ? voiceId : 'pNInz6obpgDQGcFmaJgB'
+
+    if (apiKey) {
+      try {
+        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${effectiveVoiceId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'xi-api-key': apiKey,
+          },
+          body: JSON.stringify({
+            text: cleanText,
+            model_id: 'eleven_multilingual_v2',
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75,
+            },
+          }),
+        })
+
+        if (response.ok) {
+          const blob = await response.blob()
+          const audioUrl = URL.createObjectURL(blob)
+          const audio = new Audio(audioUrl)
+          this.activeAudioElement = audio
+
+          return new Promise<boolean>((resolve) => {
+            audio.onended = () => {
+              URL.revokeObjectURL(audioUrl)
+              this.activeAudioElement = null
+              resolve(true)
+            }
+            audio.onerror = () => {
+              URL.revokeObjectURL(audioUrl)
+              this.activeAudioElement = null
+              this.speakWithBrowserFallback(cleanText, language).then(resolve)
+            }
+            audio.play().catch(() => {
+              this.speakWithBrowserFallback(cleanText, language).then(resolve)
+            })
+          })
+        } else {
+          console.warn('ElevenLabs TTS HTTP status:', response.status)
+        }
+      } catch (err) {
+        console.warn('ElevenLabs TTS request error:', err)
+      }
+    }
+
+    // High reliability fallback: browser native speech synthesis
+    return this.speakWithBrowserFallback(cleanText, language)
+  }
+
+  /**
+   * High-reliability native browser SpeechSynthesis fallback
+   */
+  public speakWithBrowserFallback(text: string, language: 'en' | 'kn' = 'en'): Promise<boolean> {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      return Promise.resolve(false)
+    }
+
+    try {
+      window.speechSynthesis.cancel()
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = language === 'kn' ? 'kn-IN' : 'en-US'
+      utterance.rate = 1.0
+      utterance.pitch = 1.0
+
+      if ('getVoices' in window.speechSynthesis) {
+        const voices = window.speechSynthesis.getVoices()
+        if (language === 'kn') {
+          const knVoice = voices.find((v) => {
+            const l = (v.lang || '').toLowerCase().replace(/_/g, '-')
+            const n = (v.name || '').toLowerCase()
+            return (
+              l.startsWith('kn') ||
+              l.startsWith('kan') ||
+              n.includes('kannada') ||
+              n.includes('ಕನ್ನಡ')
+            )
+          })
+          if (knVoice) {
+            utterance.voice = knVoice
+          }
+        } else {
+          const enVoice = voices.find((v) => (v.lang || '').toLowerCase().startsWith('en'))
+          if (enVoice) {
+            utterance.voice = enVoice
+          }
+        }
+      }
+
+      return new Promise<boolean>((resolve) => {
+        utterance.onend = () => resolve(true)
+        utterance.onerror = () => resolve(false)
+        window.speechSynthesis.speak(utterance)
+      })
+    } catch {
+      return Promise.resolve(false)
+    }
+  }
+
+  /**
+   * Stop all active audio playback (ElevenLabs Audio and browser synthesis)
+   */
+  public stopAudioPlayback() {
+    this.clearAudioQueue()
+    if (this.activeAudioElement) {
+      try {
+        this.activeAudioElement.pause()
+        this.activeAudioElement.currentTime = 0
+      } catch {}
+      this.activeAudioElement = null
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel()
+      } catch {}
+    }
   }
 
   /**
@@ -379,7 +538,7 @@ export class ElevenLabsVoiceEngine {
     }
     this.latestTranscript = ''
     this.stopMicrophoneStreaming()
-    this.clearAudioQueue()
+    this.stopAudioPlayback()
 
     if (this.ws) {
       try {

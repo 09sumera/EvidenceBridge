@@ -39,7 +39,12 @@ import {
 } from '../types'
 
 
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '')
+const envApiUrl = (import.meta.env.VITE_API_BASE_URL || '').trim()
+export const API_BASE = (
+  !envApiUrl || envApiUrl.includes('yourdomain.com') || envApiUrl.includes('example.com')
+    ? '/api/v1'
+    : envApiUrl
+).replace(/\/+$/, '')
 
 export const TOKEN_STORAGE_KEY = 'evidencebridge_token'
 export const USER_STORAGE_KEY = 'evidencebridge_user'
@@ -197,14 +202,35 @@ async function apiFetch<T>(path: string, init?: RequestInit, isRetry = false): P
     authHeaders['Authorization'] = `Bearer ${token}`
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders,
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+        ...(init?.headers ?? {}),
+      },
+      ...init,
+    })
+  } catch (err: unknown) {
+    if (err instanceof ApiError) {
+      throw err
+    }
+    const isNetworkErr =
+      err instanceof TypeError &&
+      (err.message === 'Failed to fetch' ||
+        err.message.toLowerCase().includes('failed to fetch') ||
+        err.message.toLowerCase().includes('networkerror') ||
+        err.message.toLowerCase().includes('load failed'))
+    if (isNetworkErr) {
+      throw new ApiError(
+        `Unable to reach backend service (${API_BASE}${path}). Please ensure the EvidenceBridge backend is running and accessible on port 8000.`,
+        0
+      )
+    }
+    const msg = err instanceof Error ? err.message : String(err)
+    throw new ApiError(msg, 0)
+  }
 
   // Self-healing: if session expired or rejected with 401, auto-refresh token and retry once
   if (res.status === 401 && !isRetry && !isPublic) {
@@ -664,6 +690,73 @@ export function updateSOSStatus(
     }),
   })
 }
+
+// ---------------------------------------------------------------------------
+// SMTP OTP Verification System
+// ---------------------------------------------------------------------------
+
+export interface OTPSendPayload {
+  email: string
+  portal?: string
+  name?: string
+  organization?: string
+  purpose?: string
+}
+
+export interface OTPSendResult {
+  success: boolean
+  message: string
+  email: string
+  expires_in_seconds: number
+  resend_cooldown_seconds: number
+  delivery_method: string
+  dev_otp?: string
+}
+
+export interface OTPVerifyPayload {
+  email: string
+  code: string
+  portal?: string
+  name?: string
+  organization?: string
+}
+
+export interface OTPVerifyResult {
+  success: boolean
+  message: string
+  access_token: string
+  token_type: string
+  user: UserResponse
+}
+
+export function sendOtpApi(payload: OTPSendPayload): Promise<OTPSendResult> {
+  return apiFetch<OTPSendResult>('/auth/otp/send', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function verifyOtpApi(payload: OTPVerifyPayload): Promise<OTPVerifyResult> {
+  return apiFetch<OTPVerifyResult>('/auth/otp/verify', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getOtpSystemStatus(): Promise<{
+  status: string
+  smtp_relay: string
+  smtp_port: number
+  smtp_configured: boolean
+  sender_email: string
+  otp_expiry_seconds: number
+  resend_cooldown_seconds: number
+  max_attempts: number
+  dev_simulation_enabled: boolean
+}> {
+  return apiFetch('/auth/otp/status')
+}
+
 
 
 

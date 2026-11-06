@@ -147,32 +147,6 @@ export default function Layout() {
                           isDark ? 'bg-neutral-900 border-neutral-700 text-neutral-100' : 'bg-white border-neutral-900 text-neutral-900'
                         }`}>
                           <NavLink
-                            to="/trust-density"
-                            onClick={() => setMoreDropdownOpen(false)}
-                            className={({ isActive }) =>
-                              `block px-3.5 py-2 text-xs font-bold transition-colors ${
-                                isActive
-                                  ? isDark ? 'bg-neutral-800 text-orange-400' : 'bg-cream-200 text-orange-600'
-                                  : isDark ? 'text-neutral-300 hover:bg-neutral-800' : 'text-neutral-700 hover:bg-cream-100'
-                              }`
-                            }
-                          >
-                            Regional Trust Density
-                          </NavLink>
-                          <NavLink
-                            to="/evaluation"
-                            onClick={() => setMoreDropdownOpen(false)}
-                            className={({ isActive }) =>
-                              `block px-3.5 py-2 text-xs font-bold transition-colors ${
-                                isActive
-                                  ? isDark ? 'bg-neutral-800 text-orange-400' : 'bg-cream-200 text-orange-600'
-                                  : isDark ? 'text-neutral-300 hover:bg-neutral-800' : 'text-neutral-700 hover:bg-cream-100'
-                              }`
-                            }
-                          >
-                            Benchmark Evaluation
-                          </NavLink>
-                          <NavLink
                             to="/community"
                             onClick={() => setMoreDropdownOpen(false)}
                             className={({ isActive }) =>
@@ -400,12 +374,6 @@ export default function Layout() {
                 <NavLink to="/insights" className={navLinkClasses}>
                   Insights
                 </NavLink>
-                <NavLink to="/trust-density" className={navLinkClasses}>
-                  Regional Trust
-                </NavLink>
-                <NavLink to="/evaluation" className={navLinkClasses}>
-                  Evaluation
-                </NavLink>
                 <NavLink to="/community" className={navLinkClasses}>
                   Community Stories
                 </NavLink>
@@ -453,7 +421,7 @@ export default function Layout() {
             <span>&bull;</span>
             <span>Zero PHI Cloud Leakage</span>
             <span>&bull;</span>
-            <span>7-Stage Traceable Graph</span>
+            <span>9-Stage Traceable Graph</span>
             <span>&bull;</span>
             <span>Layers 1&ndash;6 Complete</span>
           </div>

@@ -4,7 +4,6 @@ import { getClaim, getVerification, getAudit, verifyClaim } from '../api/client'
 import type { Claim, VerificationResult, AuditTrail } from '../types'
 import { VerificationBadge, VerdictBadge } from '../components/VerificationBadge'
 import { AuditTrailViewer } from '../components/AuditTrailViewer'
-import { FiveModelsAuditPanel } from '../components/FiveModelsAuditPanel'
 import { ModelStatusCard } from '../components/ModelStatusCard'
 import { useVoice } from '../context/VoiceContext'
 import { useAuth } from '../context/AuthContext'
@@ -22,7 +21,6 @@ export default function ClaimDetail() {
   const [loading, setLoading] = useState(true)
   const [reverifying, setReverifying] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [copiedHash, setCopiedHash] = useState(false)
 
   const loadData = async () => {
     if (!claimId) return
@@ -117,14 +115,6 @@ export default function ClaimDetail() {
     }
   }
 
-  const handleCopyHash = () => {
-    if (claim?.provenance?.source_hash) {
-      navigator.clipboard.writeText(claim.provenance.source_hash)
-      setCopiedHash(true)
-      setTimeout(() => setCopiedHash(false), 2000)
-    }
-  }
-
   const formatDocCurrency = (amount: number, currency = 'USD') => {
     return formatCurrency(amount, currency)
   }
@@ -163,7 +153,7 @@ export default function ClaimDetail() {
   const anomaly = verification?.anomaly_details
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
+    <div className="space-y-6 w-full max-w-7xl mx-auto">
       {/* 5 AI Models Live Status Architecture Banner */}
       <ModelStatusCard />
 
@@ -180,16 +170,6 @@ export default function ClaimDetail() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
-          <button
-            type="button"
-            onClick={() => readClaimAloud()}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-subtle transition-colors"
-            title="Read audit decision aloud using browser AI voice"
-          >
-            <span>🔊</span>
-            <span>Read Result Aloud</span>
-          </button>
-
           <button
             type="button"
             onClick={handleReverify}
@@ -338,140 +318,6 @@ export default function ClaimDetail() {
               </div>
             </div>
           </div>
-
-          {/* Verbatim Source Document */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-subtle">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Original Verbatim Medical Document
-              </h3>
-              <span className="text-[11px] text-slate-400 font-mono">
-                {claim.provenance?.text_length} characters
-              </span>
-            </div>
-            <pre className="text-xs font-mono bg-slate-50 text-slate-800 p-4 rounded-xl border border-slate-200 overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-56">
-              {claim.original_text}
-            </pre>
-          </div>
-
-          {/* Structured Extraction Fields */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-subtle">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">
-              Structured Clinical Extraction
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <span className="text-slate-400 block mb-0.5 text-[11px]">Procedure / Entity</span>
-                <span className="font-bold text-slate-800">{fields?.entity}</span>
-              </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <span className="text-slate-400 block mb-0.5 text-[11px]">Billed Charge</span>
-                <span className="font-mono font-bold text-slate-900">
-                  {fields?.cost_range
-                    ? `${fields.cost_range}${fields.cost_currency ? ` (${fields.cost_currency})` : ''}`
-                    : 'Price data not available'}
-                </span>
-              </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <span className="text-slate-400 block mb-0.5 text-[11px]">Extraction Confidence</span>
-                <span className="font-mono font-bold text-slate-900">{Math.round(claim.confidence * 100)}%</span>
-              </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <span className="text-slate-400 block mb-0.5 text-[11px]">Extracted City</span>
-                <span className="font-semibold text-slate-800">{fields?.location_city || 'Not mentioned'}</span>
-              </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <span className="text-slate-400 block mb-0.5 text-[11px]">Clinical Sentiment</span>
-                <span className="font-semibold text-slate-800 capitalize">{fields?.sentiment || 'Neutral'}</span>
-              </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <span className="text-slate-400 block mb-0.5 text-[11px]">Semantic Embedding</span>
-                <span className="font-semibold text-slate-800">{claim.indexed_vector ? 'Indexed (ChromaDB)' : 'Not indexed'}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Cryptographic Authenticity & Provenance */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-subtle">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-              Document Authenticity Fingerprint
-            </h3>
-            <p className="text-xs text-slate-500 mb-3">
-              Immutable SHA-256 cryptographic hash calculated immediately upon ingestion to guarantee tamper-resistance.
-            </p>
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200 font-mono text-xs">
-              <span className="truncate mr-3 text-slate-700">{claim.provenance?.source_hash}</span>
-              <button
-                type="button"
-                onClick={handleCopyHash}
-                className="px-3 py-1 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-[11px] flex-shrink-0 transition-colors shadow-2xs"
-              >
-                {copiedHash ? '✓ Copied' : 'Copy Hash'}
-              </button>
-            </div>
-          </div>
-
-          {/* Geographic Location Info */}
-          {location && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-subtle">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Resolved Geographic Locality
-                </h3>
-                <Link
-                  to={`/trust-density?key=${encodeURIComponent(location.normalized_key)}`}
-                  className="text-xs font-bold text-sky-600 hover:text-sky-800 hover:underline"
-                >
-                  View Metro Reliability Score &rarr;
-                </Link>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
-                  <span className="text-slate-400 block mb-0.5 text-[11px]">City</span>
-                  <span className="font-bold text-indigo-950">{location.city}</span>
-                </div>
-                <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
-                  <span className="text-slate-400 block mb-0.5 text-[11px]">State / Region</span>
-                  <span className="font-bold text-indigo-950">{location.state_or_region || 'N/A'}</span>
-                </div>
-                <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
-                  <span className="text-slate-400 block mb-0.5 text-[11px]">Canonical Key</span>
-                  <span className="font-mono font-bold text-indigo-950">{location.normalized_key}</span>
-                </div>
-                <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
-                  <span className="text-slate-400 block mb-0.5 text-[11px]">Country</span>
-                  <span className="font-bold text-indigo-950">{location.country}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Five Integrated AI Models Panel */}
-          <FiveModelsAuditPanel
-            claimId={claim.claim_id}
-            sharedContext={verification?.shared_context}
-            synthesis={verification?.synthesis}
-            nerEntities={verification?.ner_entities}
-            retrievalPassages={verification?.passages_considered?.map((p) => ({
-              passage_id: p.passage_id,
-              guideline_id: p.guideline_id,
-              title: p.title,
-              source: p.source,
-              text: p.text,
-              similarity_score: p.relevance_score,
-              model_name: 'BGE Small en-v1.5',
-            }))}
-            nliResult={verification?.nli_result}
-            providerAnomaly={verification?.provider_anomaly}
-            claimAnomaly={verification?.claim_anomaly}
-            medicineSubstitution={verification?.medicine_substitution}
-            billingReconciliation={verification?.billing_reconciliation}
-            requiresHumanReview={verification?.requires_human_review}
-            humanReviewReasons={verification?.human_review_reasons}
-          />
-
-          {/* 7-Stage Audit Trail Viewer */}
-          {auditTrail && <AuditTrailViewer auditTrail={auditTrail} verification={verification} />}
         </div>
 
         {/* Right Column (1/3): Sticky Audit Verdict Summary */}
@@ -571,6 +417,13 @@ export default function ClaimDetail() {
           </div>
         </div>
       </div>
+
+      {/* 9-Stage Decision Audit Trail spanning the FULL width of the page */}
+      {auditTrail && (
+        <div className="w-full">
+          <AuditTrailViewer auditTrail={auditTrail} verification={verification} />
+        </div>
+      )}
     </div>
   )
 }

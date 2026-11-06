@@ -140,11 +140,6 @@ export default function Home() {
         }`}>
           Audit Clinical Notes &amp; Hospital Bills
         </h1>
-        <p className={`mt-3 text-sm sm:text-base leading-relaxed text-neutral-700 dark:text-neutral-300 ${
-          isDark ? 'text-neutral-300' : 'text-neutral-700'
-        }`}>
-          Upload a bill photo, take a camera snapshot, or paste any clinical chart note or itemized hospital charge. EvidenceBridge extracts document text with OCR, verifies clinical indications against medical guidelines, and audits charges against regional pricing benchmarks.
-        </p>
       </div>
 
       {/* Stepped Process Visual */}
@@ -197,7 +192,7 @@ export default function Home() {
           </div>
           <div>
             <div className={`text-sm font-black ${isDark ? 'text-white' : 'text-neutral-950'}`}>
-              Review 7-Stage Audit
+              Review 9-Stage Audit
             </div>
             <div className={`text-xs mt-1 leading-normal ${isDark ? 'text-neutral-400' : 'text-neutral-600'}`}>
               Inspect full decision trail, guideline citations, and markup ratios.

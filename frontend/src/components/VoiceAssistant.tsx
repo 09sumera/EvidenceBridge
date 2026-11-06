@@ -51,6 +51,17 @@ export function VoiceAssistant() {
       {/* Floating Microphone Action Button */}
       {!isOpen && (
         <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2">
+          {/* Live Spoken Text Floating Subtitle Pill */}
+          {(transcript || finalUserSaid) && (
+            <div className="hidden md:flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-950/95 backdrop-blur-md text-white text-xs font-bold border border-sky-400 shadow-2xl max-w-sm animate-in fade-in slide-in-from-bottom-2">
+              <span className="text-sm shrink-0">{status === 'listening' ? '🎙️' : '🗣️'}</span>
+              <span className="text-sky-300 font-black shrink-0">
+                {status === 'listening' ? 'Hearing:' : 'You Said:'}
+              </span>
+              <span className="truncate text-white font-semibold">&ldquo;{transcript || finalUserSaid}&rdquo;</span>
+            </div>
+          )}
+
           {/* Status Label Tooltip */}
           {status === 'speaking' && (
             <button
@@ -238,103 +249,91 @@ export function VoiceAssistant() {
             <div
               className={`p-3 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
                 status === 'listening'
-                  ? 'bg-rose-50 border-rose-200 text-rose-900'
+                  ? 'bg-rose-50 border-rose-200 text-rose-900 ring-2 ring-rose-400/20'
                   : status === 'speaking'
-                  ? 'bg-clinical-50 border-clinical-200 text-clinical-900'
+                  ? 'bg-cyan-50 border-cyan-200 text-cyan-900 ring-2 ring-cyan-400/20'
                   : status === 'thinking'
                   ? 'bg-amber-50 border-amber-200 text-amber-900'
                   : 'bg-slate-50 border-slate-200 text-slate-700'
               }`}
             >
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-2">
                 <span
                   className={`w-2.5 h-2.5 rounded-full ${
                     status === 'listening'
                       ? 'bg-rose-500 animate-ping'
                       : status === 'speaking'
-                      ? 'bg-clinical-500 animate-pulse'
+                      ? 'bg-cyan-500 animate-pulse'
                       : status === 'thinking'
                       ? 'bg-amber-500 animate-spin'
                       : 'bg-slate-400'
                   }`}
                 />
-                <span className="text-xs font-bold uppercase tracking-wider">
+                <span className="text-xs font-black uppercase tracking-wider">
                   {status === 'listening'
                     ? language === 'kn'
                       ? 'ಆಲಿಸಲಾಗುತ್ತಿದೆ (Listening)...'
                       : 'Listening (Active)...'
                     : status === 'speaking'
                     ? language === 'kn'
-                      ? 'ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡಲಾಗುತ್ತಿದೆ (Speaking Kannada)...'
-                      : 'Speaking answer...'
+                      ? 'ಉತ್ತರಿಸಲಾಗುತ್ತಿದೆ (Speaking)...'
+                      : 'Speaking answer aloud...'
                     : status === 'thinking'
                     ? language === 'kn'
                       ? 'ವಿಶ್ಲೇಷಿಸಲಾಗುತ್ತಿದೆ...'
-                      : 'Analyzing with local AI...'
+                      : 'Analyzing command...'
                     : language === 'kn'
-                    ? kannadaVoiceAvailable
-                      ? 'ಸಿದ್ಧವಾಗಿದೆ (Ready)'
-                      : 'ಪಠ್ಯ ಮೋಡ್ ಸಿದ್ಧವಾಗಿದೆ (Text Mode Ready)'
+                    ? 'ಸಿದ್ಧವಾಗಿದೆ (Ready to listen)'
                     : 'Ready to listen'}
                 </span>
               </div>
-
-              {/* Live Transcript / Feedback (LISTENING) */}
-              {status === 'listening' ? (
-                <div className="w-full mt-2 text-left bg-white/95 p-3 rounded-xl border border-rose-200 shadow-2xs space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-black tracking-wider text-rose-600 uppercase">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-                      LISTENING:
-                    </span>
-                    <span className="text-[9px] font-bold text-rose-500">Live Speech</span>
-                  </div>
-                  {transcript ? (
-                    <p className="text-xs font-bold text-slate-900 leading-snug">
-                      {transcript}
-                    </p>
-                  ) : (
-                    <p className="text-[11px] text-slate-400 italic">
-                      {language === 'kn' ? 'ಈಗ ಮಾತನಾಡಿ ("ಕ್ಲೈಮ್ ತೆರೆಯಿರಿ", "ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ")...' : 'Speak now (e.g. "Open claims", "Open hospitals", "Read summary")...'}
-                    </p>
-                  )}
-                </div>
-              ) : null}
-
-              {/* Action Buttons for Speaking / Listening */}
-              <div className="flex items-center gap-2 mt-2">
-                {status === 'speaking' && (
-                  <button
-                    type="button"
-                    onClick={stopSpeaking}
-                    className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition-colors cursor-pointer"
-                  >
-                    {language === 'kn' ? '⏹ ಧ್ವನಿ ನಿಲ್ಲಿಸಿ (Stop)' : '⏹ Stop Speaking'}
-                  </button>
-                )}
-                {status === 'listening' && (
-                  <button
-                    type="button"
-                    onClick={stopListening}
-                    className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-[11px] font-bold transition-colors cursor-pointer"
-                  >
-                    {language === 'kn' ? '⏸ ಆಲಿಸುವುದು ವಿರಾಮ (Pause)' : '⏸ Pause Listening'}
-                  </button>
-                )}
-              </div>
             </div>
 
-            {/* Recognized Command (YOU SAID) */}
-            {finalUserSaid && (
-              <div className="p-3 rounded-xl bg-slate-100 border border-slate-300 text-left space-y-0.5 shadow-2xs animate-in fade-in">
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">
-                  YOU SAID:
+            {/* LIVE SPOKEN TEXT REPRESENTATION (Speech-To-Text Live Card) */}
+            <div
+              className={`p-3.5 rounded-xl border text-left space-y-1.5 transition-all shadow-adjudo-sm ${
+                status === 'listening'
+                  ? 'bg-sky-50 border-sky-300 ring-2 ring-sky-400/30'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between text-[11px] font-black uppercase tracking-wider">
+                <span className="flex items-center gap-1.5 text-slate-800">
+                  <span className="text-base">🗣️</span>
+                  <span>Spoken Text (You):</span>
                 </span>
-                <p className="text-xs font-black text-slate-900 leading-snug">
-                  &ldquo;{finalUserSaid}&rdquo;
+                {status === 'listening' ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500 text-white animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                    Live Captions
+                  </span>
+                ) : finalUserSaid ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    ✓ Recognized
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white border border-slate-200 min-h-[48px] flex items-center">
+                <p className="text-xs sm:text-sm font-black text-slate-900 leading-snug break-words">
+                  {transcript ? (
+                    <span className="text-sky-950">&ldquo;{transcript}&rdquo;</span>
+                  ) : finalUserSaid ? (
+                    <span className="text-slate-900">&ldquo;{finalUserSaid}&rdquo;</span>
+                  ) : (
+                    <span className="text-slate-400 font-normal italic">
+                      {status === 'listening'
+                        ? language === 'kn'
+                          ? 'ಈಗ ಮಾತನಾಡಿ... ("ಆಸ್ಪತ್ರೆಗಳಿಗೆ ಹೋಗಿ", "ಕ್ಲೈಮ್ ತೆರೆಯಿರಿ")'
+                          : 'Speak now (e.g. "Direct to hospitals", "Direct to claims", "Direct to insights")...'
+                        : language === 'kn'
+                        ? 'ಧ್ವನಿ ಪಠ್ಯ ಇಲ್ಲಿ ಗೋಚರಿಸುತ್ತದೆ'
+                        : 'Your spoken words will appear here in text...'}
+                    </span>
+                  )}
                 </p>
               </div>
-            )}
+            </div>
 
             {/* Error / Fallback Notice */}
             {error && (
@@ -354,11 +353,12 @@ export function VoiceAssistant() {
             )}
 
             {/* Latest Assistant Spoken/Displayed Text Card (ASSISTANT ANSWER) */}
-            {lastSpoken && status !== 'listening' && (
-              <div className="p-3 rounded-xl bg-slate-900 text-white text-xs space-y-1.5 text-left shadow-md animate-in fade-in">
+            {lastSpoken && (
+              <div className="p-3.5 rounded-xl bg-slate-900 text-white text-xs space-y-2 text-left shadow-md border border-slate-700 animate-in fade-in">
                 <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase font-bold tracking-wider">
                   <span className="flex items-center gap-1.5 font-black text-sky-400">
-                    ASSISTANT ANSWER:
+                    <span>🤖</span>
+                    <span>Assistant Answer:</span>
                   </span>
                   <button
                     type="button"
@@ -376,7 +376,7 @@ export function VoiceAssistant() {
                     <span>{language === 'kn' ? 'ಮತ್ತೆ ಹೇಳಿ (Repeat)' : 'Repeat'}</span>
                   </button>
                 </div>
-                <p className="text-slate-100 leading-relaxed text-xs">{lastSpoken}</p>
+                <p className="text-slate-100 leading-relaxed text-xs font-medium">{lastSpoken}</p>
               </div>
             )}
 
