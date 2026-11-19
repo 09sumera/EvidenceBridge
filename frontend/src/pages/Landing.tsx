@@ -125,16 +125,16 @@ export default function Landing() {
                     type="button"
                     onClick={() => handleOpenAuth('login', 'patient')}
                     className="inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-xl border border-neutral-900 bg-white hover:bg-cream-200 text-neutral-950 shadow-adjudo-sm transition-all cursor-pointer"
-                    title="Sign in as Patient"
+                    title="Login as Patient"
                   >
                     <span>👤</span>
-                    <span>Patient Sign In</span>
+                    <span>Patient Login</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => handleOpenAuth('login', 'hospital_management')}
                     className="inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-xl border border-neutral-900 bg-orange-600 hover:bg-orange-700 text-white shadow-adjudo-sm transition-all cursor-pointer"
-                    title="Sign in as Hospital Management"
+                    title="Login as Hospital Management"
                   >
                     <span>🏥</span>
                     <span>Hospital Mgmt</span>

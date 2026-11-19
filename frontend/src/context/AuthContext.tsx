@@ -65,14 +65,26 @@ interface AuthContextType {
     portal: PortalType,
     hospitalName?: string,
     personName?: string,
-  ) => Promise<{ otp: string; identifier: string }>
+    purpose?: string,
+  ) => Promise<{
+    otp?: string
+    identifier: string
+    expiresInSeconds: number
+    resendCooldownSeconds: number
+    devOtp?: string
+  }>
   otpVerify: (
     identifier: string,
     code: string,
     portal: PortalType,
     hospitalName?: string,
     personName?: string,
-  ) => Promise<boolean>
+  ) => Promise<{
+    success: boolean
+    user: User
+    redirectPath: string
+  }>
+  updateUserPassword: (email: string, newPassword: string) => Promise<boolean>
   demoLogin: (portal?: PortalType) => Promise<void>
   logout: () => void
 }
@@ -360,7 +372,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     portal: PortalType,
     hospitalName?: string,
     personName?: string,
-  ): Promise<{ otp: string; identifier: string }> => {
+    purpose?: string,
+  ): Promise<{
+    otp?: string
+    identifier: string
+    expiresInSeconds: number
+    resendCooldownSeconds: number
+    devOtp?: string
+  }> => {
     const cleanId = identifier.trim()
     if (!cleanId) {
       throw new Error(
@@ -386,7 +405,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         portal,
         name: recipient,
         organization: portal === 'hospital_management' ? (hospitalName?.trim() || 'Shree Medical Institute') : undefined,
-        purpose: 'login',
+        purpose: purpose || 'login',
       })
 
       const generated = apiRes.dev_otp || Math.floor(100000 + Math.random() * 900000).toString()
@@ -403,7 +422,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         sessionStorage.setItem('eb_pending_otp', JSON.stringify(record))
       } catch {}
 
-      return { otp: generated, identifier: cleanId }
+      return {
+        otp: generated,
+        identifier: cleanId,
+        expiresInSeconds: apiRes.expires_in_seconds || 600,
+        resendCooldownSeconds: apiRes.resend_cooldown_seconds || 30,
+        devOtp: apiRes.dev_otp,
+      }
     } catch (apiErr: any) {
       // If backend returns a specific rate-limit / validation error (e.g. 429), surface it directly
       if (apiErr && (apiErr.status === 429 || apiErr.status === 400)) {
@@ -438,7 +463,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('[EvidenceBridge Auth] Email dispatch notice:', err)
       }
 
-      return { otp: generated, identifier: cleanId }
+      return {
+        otp: generated,
+        identifier: cleanId,
+        expiresInSeconds: 600,
+        resendCooldownSeconds: 30,
+      }
     }
   }
 
@@ -448,7 +478,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     portal: PortalType,
     hospitalName?: string,
     personName?: string,
-  ): Promise<boolean> => {
+  ): Promise<{
+    success: boolean
+    user: User
+    redirectPath: string
+  }> => {
     const cleanCode = code.trim().replace(/\D/g, '')
     if (cleanCode.length !== 6) {
       throw new Error('Please enter the complete 6-digit OTP verification code.')
@@ -527,7 +561,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           sessionStorage.removeItem('eb_pending_otp')
         } catch {}
 
-        return true
+        return {
+          success: true,
+          user: u,
+          redirectPath: isHosp ? '/hospital/management' : '/audit',
+        }
       }
     } catch (apiErr: any) {
       if (apiErr && (apiErr.status === 401 || apiErr.status === 429 || apiErr.status === 400)) {
@@ -578,7 +616,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       sessionStorage.removeItem('eb_pending_otp')
     } catch {}
 
-    return true
+    return {
+      success: true,
+      user: u,
+      redirectPath: isHosp ? '/hospital/management' : '/audit',
+    }
   }
 
   const demoLogin = async (portal: PortalType = 'patient'): Promise<void> => {
@@ -616,6 +658,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const updateUserPassword = async (email: string, newPassword: string): Promise<boolean> => {
+    const cleanEmail = normalizeEmail(email)
+    if (!cleanEmail) throw new Error('Invalid email address.')
+    if (newPassword.trim().length < 4) throw new Error('Password must be at least 4 characters long.')
+
+    const existing = findRegisteredUser(cleanEmail)
+    if (existing) {
+      saveRegisteredUser({
+        ...existing,
+        password: newPassword.trim(),
+      })
+    } else {
+      saveRegisteredUser({
+        id: `usr_${Date.now()}`,
+        name: cleanEmail.split('@')[0],
+        email: cleanEmail,
+        role: 'patient',
+        password: newPassword.trim(),
+        createdAt: new Date().toISOString(),
+      })
+    }
+    return true
+  }
+
   const logout = () => {
     setAuthToken(null)
     setStoredUser(null)
@@ -647,6 +713,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signup,
         otpRequest,
         otpVerify,
+        updateUserPassword,
         demoLogin,
         logout,
       }}

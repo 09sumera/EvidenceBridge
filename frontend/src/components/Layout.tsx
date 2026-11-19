@@ -299,16 +299,16 @@ export default function Layout() {
                         ? 'text-neutral-100 bg-neutral-900 hover:bg-neutral-800 border-neutral-700'
                         : 'text-white bg-neutral-950 hover:bg-black border-neutral-900'
                     }`}
-                    title="Sign In to Patient Portal"
+                    title="Login to Patient Portal"
                   >
                     <span>👤</span>
-                    <span>Patient Sign In</span>
+                    <span>Patient Login</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => openAuth('login', 'hospital_management')}
                     className="inline-flex items-center gap-1 text-xs font-black px-2.5 py-1.5 rounded-lg transition-all border border-neutral-900 bg-orange-600 hover:bg-orange-700 text-white shadow-adjudo-sm cursor-pointer"
-                    title="Sign In to Hospital Management Portal"
+                    title="Login to Hospital Management Portal"
                   >
                     <span>🏥</span>
                     <span className="hidden sm:inline">Hospital Mgmt</span>

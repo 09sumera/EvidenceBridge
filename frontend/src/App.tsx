@@ -13,6 +13,7 @@ import CommunityStories from './pages/CommunityStories'
 import Insights from './pages/Insights'
 import HospitalFinder from './pages/HospitalFinder'
 import HospitalManagement from './pages/HospitalManagement'
+import LoginPage from './components/auth/LoginPage'
 
 function RootRoute() {
   const { isAuthenticated, isHospitalManagement } = useAuth()
@@ -54,6 +55,10 @@ export default function App() {
               <Routes>
                 {/* Landing page at root when unauthenticated */}
                 <Route path="/" element={<RootRoute />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/signup" element={<LoginPage initialMode="signup" />} />
+                <Route path="/register" element={<Navigate to="/signup" replace />} />
+                <Route path="/forgot-password" element={<LoginPage initialMode="forgot" />} />
                 <Route
                   path="/welcome"
                   element={
