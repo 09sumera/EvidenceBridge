@@ -218,8 +218,8 @@ class BioBERTNERService:
             # Build auditor-facing logically grouped medical information
             grouped_info = self.group_medical_information(text, entities)
 
-            # Detect coarse document category from extracted entities
-            detected_type = self._detect_document_type(entities)
+            # Detect coarse document category from extracted entities and text
+            detected_type = self._detect_document_type(entities, text=text)
             elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
             return NERExtractionResult(
@@ -305,6 +305,14 @@ class BioBERTNERService:
                     or len(ent_text_clean) <= 2
                     or ent_text_clean.upper() in INDIAN_LOCATIONS
                 ):
+                    i += 1
+                    continue
+
+            # Reject dates, months, or years mistakenly tagged as INVOICE_NUMBER
+            if ent.entity in ("INVOICE_NUMBER", "INVOICE_NO", "BILL_NUMBER"):
+                MONTHS_SET = {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}
+                low_txt = ent_text_clean.lower()
+                if any(m in low_txt for m in MONTHS_SET) or (ent_text_clean.isdigit() and len(ent_text_clean) == 4 and ent_text_clean.startswith("20")):
                     i += 1
                     continue
 
@@ -478,6 +486,7 @@ class BioBERTNERService:
                     hosp_header_str = first_l
                     break
 
+        loc_extracted: Optional[str] = None
         hosp_ent = next((e for e in entities if e.entity == "HOSPITAL" and not e.text.strip().isdigit() and e.text.strip().upper() not in INDIAN_LOCATIONS), None)
         if hosp_ent or hosp_header_str:
             hosp_raw = hosp_header_str or (hosp_ent.text.strip() if hosp_ent else "")
@@ -804,13 +813,15 @@ class BioBERTNERService:
                     m_dur = cells[col_map["duration"]] if "duration" in col_map and len(cells) > col_map["duration"] else ""
                     m_qty = cells[col_map["quantity"]] if "quantity" in col_map and len(cells) > col_map["quantity"] else ""
 
-                    m_freq = ""
-                    m_inst = ""
-                    freq_m = re.search(r"\b(once daily|twice daily|three times daily|thrice daily|as needed|as directed|before breakfast|after food|before food|with meals|OD|BD|TDS|QID|sos|prn|daily)\b", m_dosage, re.I)
-                    if freq_m:
-                        m_freq = freq_m.group(1).strip()
-                        m_inst = m_dosage
-                    elif m_dosage:
+                    m_freq = cells[col_map["frequency"]] if "frequency" in col_map and len(cells) > col_map["frequency"] else ""
+                    m_inst = cells[col_map["instructions"]] if "instructions" in col_map and len(cells) > col_map["instructions"] else ""
+                    if not m_freq:
+                        freq_m = re.search(r"\b(once daily|twice daily|three times daily|thrice daily|as needed|as directed|before breakfast|after food|before food|with meals|OD|BD|TDS|QID|sos|prn|daily)\b", m_dosage, re.I)
+                        if freq_m:
+                            m_freq = freq_m.group(1).strip()
+                            if not m_inst:
+                                m_inst = m_dosage
+                    if not m_inst and m_dosage:
                         m_inst = m_dosage
 
                     display_qty = m_qty or m_dosage or "1"
@@ -1474,13 +1485,39 @@ class BioBERTNERService:
         types = {e.entity for e in entities}
         text_lower = text.lower() if text else ""
 
+        # Strong prescription indicators:
+        # Outpatient Prescription, Diagnosis, Rx, Sl. No. & Medicine table headers, Dosage/Frequency/Duration columns
+        has_rx_keywords = any(kw in text_lower for kw in (
+            "outpatient prescription", "prescription", "prescribed medicines", "rx only", "\nrx", " rx ",
+            "sl. no. | medicine", "sl. no.\tmedicine", "medicine | dosage", "si. no. | medicine",
+            "sl. no.", "si. no."
+        ))
+        has_table_cols = (
+            ("medicine" in text_lower or "tablet" in text_lower or "capsule" in text_lower or "syrup" in text_lower or "spray" in text_lower)
+            and ("dosage" in text_lower or "frequency" in text_lower or "duration" in text_lower)
+        )
+        has_meds_and_diag = ("diagnosis" in text_lower or "diagnostic" in text_lower) and any(kw in text_lower for kw in ("tablet", "syrup", "capsule", "spray", "mg", "dosage"))
+        is_explicit_rx = has_rx_keywords or has_table_cols or has_meds_and_diag
+
+        # Explicit bill indicators
+        is_explicit_bill = any(kw in text_lower for kw in (
+            "tax invoice", "bill of supply", "itemized bill", "hospital bill", "invoice total",
+            "total billed amount", "stated total billed", "patient payable", "charges (4 days)", "room charges"
+        ))
+
+        if is_explicit_rx and not is_explicit_bill:
+            return "prescription"
+
         if {"INSURER", "TPA", "POLICY_NUMBER", "PREAUTH_NUMBER", "APPROVED_AMOUNT", "INSURANCE_DEDUCTION"} & types or any(kw in text_lower for kw in ("cashless claim", "claim form", "preauth", "policy number", "health insurance")):
             return "insurance_claim"
         if {"ADMISSION_DATE", "DISCHARGE_DATE", "ROOM_TYPE"} & types or any(kw in text_lower for kw in ("discharge summary", "final diagnosis", "admission date", "discharge date")):
             return "discharge_summary"
         if ({"BRAND_NAME", "GENERIC_NAME", "DOSAGE"} & types and not ({"INVOICE_NUMBER", "GSTIN", "INVOICE_TOTAL"} & types)) or any(kw in text_lower for kw in ("prescription", "rx", "dosage instructions", "consultation date")):
             return "prescription"
-        if {"INVOICE_NUMBER", "INVOICE_TOTAL", "GSTIN", "HSN_SAC", "UNIT_PRICE", "LINE_AMOUNT"} & types or any(kw in text_lower for kw in ("tax invoice", "bill of supply", "itemized bill", "hospital bill", "invoice number")):
+        # Only classify as hospital_bill if true billing markers are present; never solely due to a date or isolated number
+        if ({"INVOICE_TOTAL", "GSTIN", "HSN_SAC", "UNIT_PRICE", "LINE_AMOUNT"} & types) or is_explicit_bill:
+            return "hospital_bill"
+        if "INVOICE_NUMBER" in types and is_explicit_bill:
             return "hospital_bill"
         return "clinical_document"
 

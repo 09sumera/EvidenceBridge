@@ -16,8 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
+# Copy application source code and models
 COPY app/ /app/app/
+COPY EvidenceBridge_Model6/ /app/EvidenceBridge_Model6/
 
 # Expose FastAPI port
 EXPOSE 8000

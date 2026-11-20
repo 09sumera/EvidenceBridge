@@ -681,12 +681,15 @@ class VerificationService:
                     logger.debug(f"Historical provider claim aggregation skipped: {agg_err}")
                     logger.debug(f"Historical provider claim aggregation skipped: {agg_err}")
 
-            provider_anomaly_res = provider_anomaly_service.evaluate_provider(
-                provider_data=active_pdata,
-                provider_name=provider_id,
-                claims_count=claims_count,
-                insufficient_reason=insufficient_reason,
-            )
+            if active_pdata is None:
+                provider_anomaly_res = provider_anomaly_service.evaluate_provider(active_pdata)
+            else:
+                provider_anomaly_res = provider_anomaly_service.evaluate_provider(
+                    provider_data=active_pdata,
+                    provider_name=provider_id,
+                    claims_count=claims_count,
+                    insufficient_reason=insufficient_reason,
+                )
             if provider_anomaly_res and provider_anomaly_res.is_anomaly:
                 human_review_reasons.append("Model 4 Provider Anomaly screening detected unusual provider billing pattern.")
         except Exception as p_err:
@@ -721,10 +724,13 @@ class VerificationService:
         try:
             from app.services.billing_reconciliation import billing_reconciliation_service
             from app.models.schemas import BillingClassification
-            billing_rec_res = billing_reconciliation_service.reconcile_claim_billing(
-                claim=claim,
-                text=claim.original_text
-            )
+            source_t = getattr(claim, "source_type", "")
+            # Only perform billing reconciliation when document is genuinely classified/routed as a medical bill
+            if source_t == "hospital_bill" or (source_t != "prescription" and billing_reconciliation_service.is_likely_bill(claim.original_text)):
+                billing_rec_res = billing_reconciliation_service.reconcile_claim_billing(
+                    claim=claim,
+                    text=claim.original_text
+                )
             if billing_rec_res:
                 if billing_rec_res.classification == BillingClassification.POSSIBLE_DUPLICATE:
                     human_review_reasons.append(

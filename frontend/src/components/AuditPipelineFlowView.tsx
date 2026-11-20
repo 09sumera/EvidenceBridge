@@ -96,7 +96,11 @@ export function AuditPipelineFlowView({
     ? result.verification.ner_grouped_info || buildFallbackGroupedInfo(sharedContext, nerEntities)
     : null
 
-  const rec: BillingReconciliationResult | null = result
+  const isPrescription = sharedContext?.source_type === 'prescription' ||
+    result?.claim?.source_type === 'prescription' ||
+    result?.verification?.ner_grouped_info?.document_type === 'prescription'
+
+  const rec: BillingReconciliationResult | null = (result && !isPrescription)
     ? (result.verification.billing_reconciliation &&
       (result.verification.billing_reconciliation.itemized_sum > 0 ||
         result.verification.billing_reconciliation.stated_total != null))
@@ -1370,6 +1374,14 @@ export function AuditPipelineFlowView({
                     </table>
                   </div>
                 )}
+              </div>
+            ) : isPrescription ? (
+              <div className="p-8 text-center text-xs text-slate-600 dark:text-neutral-400 bg-white dark:bg-neutral-800/60 rounded-xl border border-slate-200 dark:border-neutral-700 space-y-2">
+                <div className="text-2xl">📋</div>
+                <div className="font-bold text-slate-800 dark:text-white">Prescription Document: Billing Reconciliation Not Applicable</div>
+                <p className="max-w-md mx-auto text-[11px] text-slate-500 dark:text-neutral-400">
+                  This document is an outpatient prescription containing clinical medication instructions. Line-item invoice arithmetic and billing reconciliation are performed exclusively on hospital invoices and bills of supply.
+                </p>
               </div>
             ) : (
               <div className="p-8 text-center text-xs text-neutral-500">

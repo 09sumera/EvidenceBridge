@@ -1,0 +1,45 @@
+{
+    "model_name": "mobilenetv3_small",
+    "architecture": "MobileNetV3-Small",
+    "task": "English medical document image classification",
+    "num_classes": 5,
+    "classes": [
+        "discharge_summary",
+        "laboratory_report",
+        "medical_billing",
+        "other_unsupported",
+        "prescription"
+    ],
+    "model_files": {
+        "onnx": "model/mobilenetv3_small.onnx",
+        "pytorch": "model/mobilenetv3_small_best.pth"
+    },
+    "onnx_metadata": {
+        "input_tensor_name": "image",
+        "output_tensor_name": "logits",
+        "input_shape": [
+            "batch_size",
+            3,
+            224,
+            224
+        ],
+        "output_shape": [
+            "batch_size",
+            5
+        ],
+        "input_data_type": "float32",
+        "output_format": "logits"
+    },
+    "training_checkpoint": {
+        "epoch": 8,
+        "best_val_loss": 1.035077475412057e-05,
+        "best_val_accuracy": 1.0,
+        "class_names": [
+            "discharge_summary",
+            "laboratory_report",
+            "medical_billing",
+            "other_unsupported",
+            "prescription"
+        ]
+    }
+}

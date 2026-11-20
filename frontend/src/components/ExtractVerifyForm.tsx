@@ -723,8 +723,16 @@ export function ExtractVerifyForm({
                   <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
                     Distribution:
                   </span>
-                  <span className={model6Prediction.document_category === 'invoice_or_receipt' ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
-                    Invoice/Bill: {((model6Prediction.all_probabilities['invoice_or_receipt'] ?? 0) * 100).toFixed(1)}%
+                  {model6Prediction.all_probabilities['discharge_summary'] !== undefined && (
+                    <>
+                      <span className={model6Prediction.document_category === 'discharge_summary' ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
+                        Discharge Summary: {((model6Prediction.all_probabilities['discharge_summary'] ?? 0) * 100).toFixed(1)}%
+                      </span>
+                      <span className="text-slate-300">•</span>
+                    </>
+                  )}
+                  <span className={(model6Prediction.document_category === 'medical_billing' || model6Prediction.document_category === 'invoice_or_receipt') ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
+                    Medical Billing: {(((model6Prediction.all_probabilities['medical_billing'] ?? model6Prediction.all_probabilities['invoice_or_receipt']) ?? 0) * 100).toFixed(1)}%
                   </span>
                   <span className="text-slate-300">•</span>
                   <span className={model6Prediction.document_category === 'prescription' ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
@@ -734,6 +742,14 @@ export function ExtractVerifyForm({
                   <span className={model6Prediction.document_category === 'laboratory_report' ? 'font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded' : 'text-slate-600'}>
                     Lab Report: {((model6Prediction.all_probabilities['laboratory_report'] ?? 0) * 100).toFixed(1)}%
                   </span>
+                  {model6Prediction.all_probabilities['other_unsupported'] !== undefined && (
+                    <>
+                      <span className="text-slate-300">•</span>
+                      <span className={model6Prediction.document_category === 'other_unsupported' ? 'font-bold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded' : 'text-slate-500'}>
+                        Unsupported: {((model6Prediction.all_probabilities['other_unsupported'] ?? 0) * 100).toFixed(1)}%
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 <div className="text-[10px] text-indigo-700 font-semibold bg-indigo-50/80 px-2 py-0.5 rounded-md border border-indigo-100">

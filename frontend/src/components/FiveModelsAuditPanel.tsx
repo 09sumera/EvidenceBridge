@@ -726,13 +726,23 @@ export function buildFallbackGroupedInfo(
 
 export function buildFallbackBillingReconciliation(text: string): BillingReconciliationResult | null {
   if (!text) return null
+  // Prescriptions contain clinical dosing instructions, not billing line items
+  if (/outpatient\s*prescription|prescription|prescribed\s*medicines|\brx\b|sl\.?\s*no\.?\s*\|\s*medicine/i.test(text) && !/tax\s*invoice|hospital\s*bill|bill\s*of\s*supply|total\s*billed\s*amount/i.test(text)) {
+    return null
+  }
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
   const items: BillingLineItem[] = []
   let itemIdx = 1
 
   const isAmount = (s: string) => {
-    const clean = s.replace(/[\s/=\-onlycrdr]+$/i, '').replace(/^[₹$€£RsINR\s.]+/i, '').replace(/,/g, '').trim()
-    return Boolean(clean && !isNaN(Number(clean)) && Number(clean) > 0 && Number(clean) < 10000000)
+    const raw = s.trim()
+    if (/^\d{1,2}[\.\)]?$/.test(raw)) return false
+    if (/\b(?:tablet|tablets|tab|tabs|spray|sprays|day|days|capsule|capsules|cap|caps|dose|doses|ml|mg)\b/i.test(raw)) return false
+    const clean = raw.replace(/[\s/=\-onlycrdr]+$/i, '').replace(/^[₹$€£RsINR\s.]+/i, '').replace(/,/g, '').trim()
+    const val = Number(clean)
+    const hasCurrency = /[₹$€£]|Rs\.?|INR/i.test(raw)
+    if (!hasCurrency && val < 50) return false
+    return Boolean(clean && !isNaN(val) && val > 0 && val < 10000000 && !(val >= 100000 && val <= 999999 && !hasCurrency))
   }
   const getAmt = (s: string) => {
     const clean = s.replace(/[\s/=\-onlycrdr]+$/i, '').replace(/^[₹$€£RsINR\s.]+/i, '').replace(/,/g, '').trim()

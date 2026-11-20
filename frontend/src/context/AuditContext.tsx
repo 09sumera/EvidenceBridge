@@ -52,7 +52,7 @@ export function AuditProvider({ children }: { children: React.ReactNode }) {
     return {
       result: null,
       text: '',
-      sourceType: 'hospital_bill',
+      sourceType: 'other',
       sourceUrl: '',
       activePreset: null,
       imageName: null,
@@ -139,7 +139,7 @@ export function AuditProvider({ children }: { children: React.ReactNode }) {
   const clearAudit = () => {
     setResultState(null)
     setTextState('')
-    setSourceTypeState('hospital_bill')
+    setSourceTypeState('other')
     setSourceUrlState('')
     setActivePresetState(null)
     setImagePreviewState(null)

@@ -102,6 +102,12 @@ class AuditOrchestratorService:
         ner_result: Optional[NERExtractionResult] = None
         try:
             ner_result = ner_service.extract_entities(doc_text)
+            if ner_result and ner_result.document_type_detected == "prescription":
+                if source_type in ("hospital_bill", "clinical_note", "unknown", "", "other"):
+                    logger.info("Prescription document detected from verified text/NER; routing source_type to 'prescription'.")
+                    source_type = "prescription"
+            elif ner_result and ner_result.document_type_detected == "hospital_bill" and source_type in ("clinical_note", "unknown", ""):
+                source_type = "hospital_bill"
         except Exception as e:
             logger.warning(f"Model 1 BioBERT extraction failed: {e}")
 

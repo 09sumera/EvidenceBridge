@@ -93,7 +93,8 @@ class BillingReconciliationService:
             r"^\s*(?:itemized\s*(?:total|sum|charges?)|total\b[^\n:=]*|stated\s*(?:total|billed|bill)?\b[^\n:=]*|invoice\s*total|net\s*(?:total|payable|amount)|final\s*(?:bill|amount)|grand\s*total|subtotal|balance|amount\s*paid|patient\s*payable|amount\s*payable)\s*[:=]?",
             r"^\s*(?:[A-Za-z\s,.-]+\b)?(?:davangere|bengaluru|bangalore|mumbai|delhi|chennai|hyderabad|kolkata|ballari|mangaluru|mysuru|karnataka|maharashtra|tamil\s*nadu|india)\b.*(?:\b\d{6}\b)?",
             r"^\s*(?:pin|pincode|postal\s*code|zip|zipcode)\s*[:#–\-]?\s*\d{5,6}\b",
-            r"^\s*(?:sl\s*no|s\.no|item\s*no|description|particulars|rate|qty|quantity|amount)\s*\|",
+            r"^\s*(?:sl\s*no|s\.no|si\.?\s*no|item\s*no|description|particulars|rate|qty|quantity|amount)\s*\|",
+            r"^\s*(?:sl\.?\s*no\.?|s\.no\.?|si\.?\s*no\.?|medicine|drug|dosage|frequency|duration|instructions?|advice|notes?)\s*$",
             r"^[-=_\s]+$",
         ]
 
@@ -139,12 +140,24 @@ class BillingReconciliationService:
         item_idx = 1
 
         def is_pure_amount(s: str) -> bool:
-            clean = re.sub(r"[\s/=\-onlycrdr]+$", "", s.strip(), flags=re.I)
+            s_raw = s.strip()
+            # Standalone serial numbers like 1, 2, 1., 2., 1), 2) are not monetary billing amounts
+            if re.fullmatch(r"^\d{1,2}[\.\)]?$", s_raw):
+                return False
+            # Standalone clinical dosing / time intervals are not monetary amounts
+            if re.search(r"\b(?:tablet|tablets|tab|tabs|spray|sprays|day|days|capsule|capsules|cap|caps|dose|doses|ml|mg)\b", s_raw, re.I):
+                return False
+            clean = re.sub(r"[\s/=\-onlycrdr]+$", "", s_raw, flags=re.I)
+            has_currency = bool(re.search(r"[₹$€£]|Rs\.?|INR", s_raw, re.I))
             clean = re.sub(r"^[₹$€£RsINR\s.]+", "", clean, flags=re.I).replace(",", "").strip()
             if clean and clean.replace(".", "", 1).isdigit():
                 try:
                     val = float(clean)
-                    return 0 < val < 10000000 and not (100000 <= val <= 999999 and not re.search(r"[₹$€£]|Rs\.?|INR", s, re.I))
+                    if not has_currency:
+                        # Non-currency integers < 50 are usually serial numbers, counts or durations, not invoice items
+                        if val < 50.0 and ("." not in clean or clean.endswith(".0") or clean.endswith(".00")):
+                            return False
+                    return 0 < val < 10000000 and not (100000 <= val <= 999999 and not has_currency)
                 except ValueError:
                     return False
             return False
@@ -642,11 +655,32 @@ class BillingReconciliationService:
 
         return comparisons
 
+    def is_likely_bill(self, text: str) -> bool:
+        """Check whether document text contains genuine medical billing indicators."""
+        if not text:
+            return False
+        t_low = text.lower()
+        bill_indicators = (
+            "tax invoice", "bill of supply", "itemized bill", "hospital bill",
+            "invoice total", "total billed amount", "stated total billed",
+            "patient payable", "amount payable", "room & nursing charges",
+            "line items:", "total (itemized)", "bill no:", "invoice no:"
+        )
+        rx_indicators = (
+            "outpatient prescription", "prescription", "rx only", "prescribed medicines",
+            "sl. no. | medicine", "si. no. | medicine", "take 1 tablet"
+        )
+        has_bill = any(k in t_low for k in bill_indicators)
+        has_rx = any(k in t_low for k in rx_indicators)
+        if has_rx and not has_bill:
+            return False
+        return has_bill
+
     def reconcile_claim_billing(
         self,
         claim: Optional[Any] = None,
         text: Optional[str] = None
-    ) -> BillingReconciliationResult:
+    ) -> Optional[BillingReconciliationResult]:
         """
         Complete claim-level billing reconciliation:
         1. Extract line items & calculate itemized sum.
@@ -657,6 +691,12 @@ class BillingReconciliationService:
         6. Determine classification and non-accusatory auditor findings.
         """
         doc_text = text or (getattr(claim, "original_text", "") if claim else "") or ""
+        source_type = getattr(claim, "source_type", None)
+
+        # Prescriptions never enter billing reconciliation
+        if source_type == "prescription" or (source_type != "hospital_bill" and not self.is_likely_bill(doc_text) and any(w in doc_text.lower() for w in ("prescription", "rx only", "prescribed medicines", "outpatient prescription"))):
+            logger.info("Prescription document identified: billing reconciliation is not applicable.")
+            return None
 
         # 1. Line items & Stated total
         line_items = self.parse_line_items(doc_text)

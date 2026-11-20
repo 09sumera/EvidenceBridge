@@ -1,0 +1,21 @@
+{
+    "image_size": [
+        224,
+        224
+    ],
+    "color_mode": "RGB",
+    "input_layout": "NCHW",
+    "normalization": {
+        "mean": [
+            0.485,
+            0.456,
+            0.406
+        ],
+        "std": [
+            0.229,
+            0.224,
+            0.225
+        ]
+    },
+    "input_dtype": "float32"
+}

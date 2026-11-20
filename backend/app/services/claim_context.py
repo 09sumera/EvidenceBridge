@@ -67,6 +67,8 @@ class ClaimContextService:
         explicit_header_hospital = None
         if hosp_header:
             raw_h = hosp_header.group(1).strip()
+            if " - " in raw_h:
+                raw_h = raw_h.split(" - ", 1)[0].strip()
             explicit_header_hospital = re.sub(
                 r",\s*(?:Davangere|Bengaluru|Bangalore|Mangaluru|Ballari|Belagavi|Mysuru|Hubballi|Karnataka|India|District|State).*$",
                 "", raw_h, flags=re.IGNORECASE
@@ -75,6 +77,8 @@ class ClaimContextService:
             lines_all = [l.strip() for l in text.splitlines() if l.strip()]
             for first_l in lines_all[:3]:
                 if re.search(r"\b(?:Hospital|Clinic|Medical Center|Medical Institute|Institute|Healthcare|Health System)\b", first_l, re.I):
+                    if " - " in first_l:
+                        first_l = first_l.split(" - ", 1)[0].strip()
                     explicit_header_hospital = re.sub(
                         r",\s*(?:Davangere|Bengaluru|Bangalore|Mangaluru|Ballari|Belagavi|Mysuru|Hubballi|Karnataka|India|District|State).*$",
                         "", first_l, flags=re.IGNORECASE

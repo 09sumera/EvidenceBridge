@@ -220,10 +220,10 @@ class Settings(BaseSettings):
         default_factory=lambda: os.getenv("MODEL_5_MEDICINE_MATCHER_PATH") or "models/EvidenceBridge_BioBERT/model_5_medicine/medicine_matcher.joblib"
     )
 
-    # Model 6: Image-Based Medical Document AI (ResNet18)
+    # Model 6: Image-Based Medical Document AI (MobileNetV3-Small)
     MODEL_6_DOCUMENT_AI_PATH: str = Field(
         default_factory=lambda: os.getenv("MODEL_6_DOCUMENT_AI_PATH")
-        or r"C:\Users\tejes\Downloads\EvidenceBridge_Model6_COMPLETE\EvidenceBridge_Model6\models\evidencebridge_model6_resnet18.pth"
+        or "EvidenceBridge_Model6/model/mobilenetv3_small.onnx"
     )
     MODEL_6_CONFIDENCE_THRESHOLD: float = Field(
         default_factory=lambda: float(os.getenv("MODEL_6_CONFIDENCE_THRESHOLD", "0.55"))

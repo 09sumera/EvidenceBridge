@@ -865,6 +865,10 @@ async def extract_and_verify(
         from app.services.ner import ner_service
         ner_res = ner_service.extract_entities(raw_text)
         ner_entities = ner_res.entities
+        if ner_res and ner_res.document_type_detected == "prescription" and claim.source_type in ("hospital_bill", "clinical_note", "unknown", ""):
+            claim.source_type = "prescription"
+            if claim.provenance:
+                claim.provenance.source_type = "prescription"
     except Exception as ner_err:
         logger.debug(f"BioBERT NER extraction skipped: {ner_err}")
 
@@ -1896,7 +1900,7 @@ async def get_models_status():
     from app.services.provider_anomaly import provider_anomaly_service
     from app.services.claim_anomaly import claim_anomaly_service
     from app.services.medicine_service import medicine_service
-    from app.services.image_document_model import image_document_model_service
+    from app.services.image_document_model import image_document_model_service, CLASSES
 
     import torch
     cuda_available = torch.cuda.is_available()
@@ -1959,12 +1963,12 @@ async def get_models_status():
                 "purpose": "Document and prescription OCR extraction",
             },
             "model_6_document_ai": {
-                "name": "Model 6: Image-Based Medical Document AI (ResNet18)",
+                "name": "Model 6: Image-Based Medical Document AI (MobileNetV3-Small)",
                 "path": str(image_document_model_service.model_path),
                 "available": image_document_model_service.is_available(),
-                "classes": ["prescription", "laboratory_report", "invoice_or_receipt"],
+                "classes": list(CLASSES),
                 "threshold": image_document_model_service.confidence_threshold,
-                "purpose": "Classifies raw medical document images into prescription, laboratory report, or invoice",
+                "purpose": "Classifies medical document images into discharge summary, laboratory report, medical billing, prescription, or unsupported",
             }
         }
     }
@@ -2108,12 +2112,20 @@ async def process_document_image_endpoint(payload: dict[str, Any]):
     if not is_clear:
         notice = "Document text could only be partially extracted. You can review and edit or type details manually."
 
+    suggested_source_type = m6_res.suggested_source_type
+    if (suggested_source_type in ("other", "unknown", None) or not m6_res.is_supported) and ocr_text:
+        low_t = ocr_text.lower()
+        if any(w in low_t for w in ("outpatient prescription", "prescription", "prescribed medicines", "rx only", "sl. no. | medicine", "si. no. | medicine")):
+            suggested_source_type = "prescription"
+        elif any(w in low_t for w in ("tax invoice", "bill of supply", "itemized bill", "hospital bill", "total billed amount", "stated total billed")):
+            suggested_source_type = "hospital_bill"
+
     return {
         "model6_prediction": m6_res,
         "ocr_text": ocr_text,
         "ocr_confidence": ocr_conf,
         "ocr_lines_count": ocr_lines,
-        "suggested_source_type": m6_res.suggested_source_type,
+        "suggested_source_type": suggested_source_type,
         "is_clear": is_clear,
         "notice": notice,
     }

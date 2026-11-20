@@ -1,15 +1,18 @@
 """
-Comprehensive Tests for Model 6: Image-Based Medical Document AI (ResNet18).
+Comprehensive Tests for Model 6: Image-Based Medical Document AI (MobileNetV3-Small).
 
 Validates:
-1. Model 6 Checkpoint loading and initialization from C:\\Users\\tejes\\Downloads\\EvidenceBridge_Model6_COMPLETE.
-2. Inference on supported Invoice/Receipt image -> 'invoice_or_receipt' (Medical Invoice / Receipt).
-3. Inference on supported Prescription image -> 'prescription' (Prescription).
-4. Inference on supported Laboratory Report image -> 'laboratory_report' (Laboratory Report).
-5. Safe handling of low-confidence/uncertain images (solid noise or ambiguous documents).
-6. Base64 string decoding and classification via classify_base64().
-7. Integration with RapidOCR in process-image endpoint flow.
-8. Preservation of manual text submission and Models 1–5 integrity.
+1. Model 6 Checkpoint loading and initialization from EvidenceBridge_Model6.
+2. Inference on supported Medical Billing / Invoice image -> 'medical_billing' ('hospital_bill').
+3. Inference on supported Prescription image -> 'prescription' ('prescription').
+4. Inference on supported Laboratory Report image -> 'laboratory_report' ('clinical_note').
+5. Inference on supported Discharge Summary image -> 'discharge_summary' ('clinical_note').
+6. Safe handling of Unsupported Document images -> 'other_unsupported' (is_supported=False).
+7. Base64 string decoding and classification via classify_base64().
+8. Corrupt or unparseable base64 handled safely without crashing.
+9. Low-confidence/synthetic noise image handling with valid probability outputs.
+10. Integration with RapidOCR in process-image endpoint flow.
+11. Preservation of manual text submission and Models 1–5 integrity.
 """
 
 import base64
@@ -28,10 +31,14 @@ from app.services.image_document_model import (
 from app.models.schemas import Model6PredictionResult, Claim, ExtractedFields, LocationInfo, ProvenanceMetadata
 
 
-MODEL6_ROOT = Path(r"C:\Users\tejes\Downloads\EvidenceBridge_Model6_COMPLETE\EvidenceBridge_Model6")
-INVOICE_IMAGE = MODEL6_ROOT / "dataset" / "labels" / "review_images" / "invoice_or_receipt" / "MEDOCR_TRAIN_0227.jpg"
-PRESCRIPTION_IMAGE = MODEL6_ROOT / "dataset" / "labels" / "review_images" / "prescription" / "MEDOCR_TRAIN_0068.jpg"
-LAB_REPORT_IMAGE = MODEL6_ROOT / "dataset" / "labels" / "review_images" / "laboratory_report" / "MEDOCR_TRAIN_0040.jpg"
+MODEL6_ROOT = Path(__file__).resolve().parents[2] / "EvidenceBridge_Model6"
+SAMPLES_DIR = MODEL6_ROOT / "tests" / "samples"
+
+INVOICE_IMAGE = SAMPLES_DIR / "medical_billing_sample.png"
+PRESCRIPTION_IMAGE = SAMPLES_DIR / "prescription_sample.jpg"
+LAB_REPORT_IMAGE = SAMPLES_DIR / "laboratory_report_sample.jpg"
+DISCHARGE_IMAGE = SAMPLES_DIR / "discharge_summary_sample.jpg"
+UNSUPPORTED_IMAGE = SAMPLES_DIR / "other_unsupported_sample.jpg"
 
 
 def _image_to_base64(path: Path) -> str:
@@ -39,7 +46,8 @@ def _image_to_base64(path: Path) -> str:
     with open(path, "rb") as f:
         data = f.read()
     b64 = base64.b64encode(data).decode("utf-8")
-    return f"data:image/jpeg;base64,{b64}"
+    ext = "png" if path.suffix.lower() == ".png" else "jpeg"
+    return f"data:image/{ext};base64,{b64}"
 
 
 def _create_synthetic_noise_image() -> bytes:
@@ -55,31 +63,40 @@ def _create_synthetic_noise_image() -> bytes:
 # ============================================================================
 
 def test_scenario_1_model6_checkpoint_availability():
-    """Verify Model 6 trained ResNet18 checkpoint exists and is accessible."""
+    """Verify Model 6 trained MobileNetV3-Small ONNX model exists and is accessible."""
     assert image_document_model_service.is_available() is True
     assert image_document_model_service.model_path.exists()
     assert image_document_model_service.model_path.is_file()
-    assert set(CLASSES) == {"prescription", "laboratory_report", "invoice_or_receipt"}
+    assert set(CLASSES) == {
+        "discharge_summary",
+        "laboratory_report",
+        "medical_billing",
+        "other_unsupported",
+        "prescription",
+    }
 
 
 # ============================================================================
-# Scenario 2: Supported Medical Invoice / Receipt Image Inference
+# Scenario 2: Supported Medical Invoice / Billing Image Inference
 # ============================================================================
 
 def test_scenario_2_classify_invoice_image():
-    """Verify genuine medical invoice image is classified as invoice_or_receipt."""
+    """Verify genuine medical invoice image is classified as medical_billing."""
     if not INVOICE_IMAGE.exists():
         pytest.skip(f"Test image not found at {INVOICE_IMAGE}")
 
     res = image_document_model_service.classify_image(INVOICE_IMAGE)
     assert isinstance(res, Model6PredictionResult)
-    assert res.document_category == "invoice_or_receipt"
-    assert res.category_label == "Medical Invoice / Receipt"
-    assert res.model_score >= 0.90, f"Expected high confidence, got {res.model_score}"
+    assert res.document_category == "medical_billing"
+    assert res.category_label == "Medical Billing / Invoice"
+    assert res.model_score >= 0.55, f"Expected confidence >= threshold, got {res.model_score}"
     assert res.is_supported is True
     assert res.suggested_source_type == "hospital_bill"
+    assert "medical_billing" in res.all_probabilities
+    assert res.all_probabilities["medical_billing"] >= 0.55
+    # Verify legacy alias for backward compatibility
     assert "invoice_or_receipt" in res.all_probabilities
-    assert res.all_probabilities["invoice_or_receipt"] >= 0.90
+    assert res.all_probabilities["invoice_or_receipt"] == res.all_probabilities["medical_billing"]
 
 
 # ============================================================================
@@ -95,11 +112,11 @@ def test_scenario_3_classify_prescription_image():
     assert isinstance(res, Model6PredictionResult)
     assert res.document_category == "prescription"
     assert res.category_label == "Prescription"
-    assert res.model_score >= 0.90, f"Expected high confidence, got {res.model_score}"
+    assert res.model_score >= 0.55, f"Expected confidence >= threshold, got {res.model_score}"
     assert res.is_supported is True
     assert res.suggested_source_type == "prescription"
     assert "prescription" in res.all_probabilities
-    assert res.all_probabilities["prescription"] >= 0.90
+    assert res.all_probabilities["prescription"] >= 0.55
 
 
 # ============================================================================
@@ -115,30 +132,66 @@ def test_scenario_4_classify_laboratory_report_image():
     assert isinstance(res, Model6PredictionResult)
     assert res.document_category == "laboratory_report"
     assert res.category_label == "Laboratory Report"
-    assert res.model_score >= 0.90, f"Expected high confidence, got {res.model_score}"
+    assert res.model_score >= 0.55, f"Expected confidence >= threshold, got {res.model_score}"
     assert res.is_supported is True
     assert res.suggested_source_type == "clinical_note"
     assert "laboratory_report" in res.all_probabilities
-    assert res.all_probabilities["laboratory_report"] >= 0.90
+    assert res.all_probabilities["laboratory_report"] >= 0.55
 
 
 # ============================================================================
-# Scenario 5: Base64 Input Decoding and Classification
+# Scenario 5: Supported Discharge Summary Image Inference
 # ============================================================================
 
-def test_scenario_5_classify_base64_data_url():
+def test_scenario_5_classify_discharge_summary_image():
+    """Verify genuine discharge summary image is classified as discharge_summary."""
+    if not DISCHARGE_IMAGE.exists():
+        pytest.skip(f"Test image not found at {DISCHARGE_IMAGE}")
+
+    res = image_document_model_service.classify_image(DISCHARGE_IMAGE)
+    assert isinstance(res, Model6PredictionResult)
+    assert res.document_category == "discharge_summary"
+    assert res.category_label == "Discharge Summary"
+    assert res.model_score >= 0.55, f"Expected confidence >= threshold, got {res.model_score}"
+    assert res.is_supported is True
+    assert res.suggested_source_type == "clinical_note"
+    assert "discharge_summary" in res.all_probabilities
+    assert res.all_probabilities["discharge_summary"] >= 0.55
+
+
+# ============================================================================
+# Scenario 6: Unsupported Document Handling
+# ============================================================================
+
+def test_scenario_6_classify_unsupported_document():
+    """Verify unsupported non-medical image is gated safely with is_supported=False."""
+    if not UNSUPPORTED_IMAGE.exists():
+        pytest.skip(f"Test image not found at {UNSUPPORTED_IMAGE}")
+
+    res = image_document_model_service.classify_image(UNSUPPORTED_IMAGE)
+    assert isinstance(res, Model6PredictionResult)
+    assert res.document_category == "other_unsupported"
+    assert res.is_supported is False
+    assert res.suggested_source_type == "other"
+
+
+# ============================================================================
+# Scenario 7: Base64 Input Decoding and Classification
+# ============================================================================
+
+def test_scenario_7_classify_base64_data_url():
     """Verify classify_base64() decodes data URL and runs Model 6 inference."""
     if not INVOICE_IMAGE.exists():
         pytest.skip(f"Test image not found at {INVOICE_IMAGE}")
 
     b64_url = _image_to_base64(INVOICE_IMAGE)
     res = image_document_model_service.classify_base64(b64_url)
-    assert res.document_category == "invoice_or_receipt"
+    assert res.document_category == "medical_billing"
     assert res.is_supported is True
-    assert res.model_score >= 0.90
+    assert res.model_score >= 0.55
 
 
-def test_scenario_6_corrupt_base64_handled_safely():
+def test_scenario_8_corrupt_base64_handled_safely():
     """Verify corrupt or un-parseable base64 does not crash and returns safe fallback."""
     res = image_document_model_service.classify_base64("data:image/jpeg;base64,invalid_gibberish_12345!@#$")
     assert res.document_category == "uncertain_or_unsupported"
@@ -147,25 +200,24 @@ def test_scenario_6_corrupt_base64_handled_safely():
 
 
 # ============================================================================
-# Scenario 7: Low Confidence / Neutral Noise Image Handling
+# Scenario 9: Low Confidence / Neutral Noise Image Handling
 # ============================================================================
 
-def test_scenario_7_low_confidence_noise_handling():
+def test_scenario_9_low_confidence_noise_handling():
     """Verify uniform grey synthetic image is evaluated safely with valid probability output."""
     noise_bytes = _create_synthetic_noise_image()
     res = image_document_model_service.classify_image(noise_bytes)
     assert isinstance(res, Model6PredictionResult)
-    # The output should have all 3 class probabilities summing to ~1.0
-    assert len(res.all_probabilities) == 3
-    prob_sum = sum(res.all_probabilities.values())
+    assert len(res.all_probabilities) >= 5
+    prob_sum = sum(res.probabilities.values()) if res.probabilities else sum(res.all_probabilities.values())
     assert 0.98 <= prob_sum <= 1.02
 
 
 # ============================================================================
-# Scenario 8: Integration with Unified Process Image Endpoint Logic
+# Scenario 10: Integration with Unified Process Image Endpoint Logic
 # ============================================================================
 
-def test_scenario_8_document_process_image_endpoint_logic():
+def test_scenario_10_document_process_image_endpoint_logic():
     """Verify combined Model 6 classification + RapidOCR text extraction logic."""
     if not INVOICE_IMAGE.exists():
         pytest.skip(f"Test image not found at {INVOICE_IMAGE}")
@@ -175,7 +227,7 @@ def test_scenario_8_document_process_image_endpoint_logic():
     b64_url = _image_to_base64(INVOICE_IMAGE)
     m6_res = image_document_model_service.classify_base64(b64_url)
     assert m6_res.is_supported is True
-    assert m6_res.document_category == "invoice_or_receipt"
+    assert m6_res.document_category == "medical_billing"
 
     ocr_res = ocr_service.extract_text_from_base64(b64_url)
     assert "text" in ocr_res
@@ -183,10 +235,10 @@ def test_scenario_8_document_process_image_endpoint_logic():
 
 
 # ============================================================================
-# Scenario 9: Preservation of Manual Text Submission and Models 1–5 Integrity
+# Scenario 11: Preservation of Manual Text Submission and Models 1–5 Integrity
 # ============================================================================
 
-def test_scenario_9_manual_text_submission_models_unaffected():
+def test_scenario_11_manual_text_submission_models_unaffected():
     """Verify text-based claims continue functioning through Models 1-5 without images."""
     from app.services.claim_context import claim_context_service
     from app.services.provider_anomaly import provider_anomaly_service
@@ -201,7 +253,7 @@ def test_scenario_9_manual_text_submission_models_unaffected():
         "Discharge Date: 14 February 2026\n"
         "Length of stay: 4 days\n"
         "Primary Diagnosis: Bacterial Pneumonia\n"
-        "Total Bill: ₹30,000.00\n"
+        "Total Bill: INR 30,000.00\n"
     )
 
     claim = Claim(

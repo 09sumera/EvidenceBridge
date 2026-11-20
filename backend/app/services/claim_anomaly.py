@@ -506,7 +506,7 @@ class ClaimAnomalyService:
         if claim_data.get("encounter_type") in ("OUTPATIENT_OR_EMERGENCY", "OUTPATIENT", "PRESCRIPTION") or claim_data.get("is_inpatient") is False:
             return ClaimAnomalyResult(
                 model_version="V3 Strict Temporal" + (" + V4-A Experimental" if self._v4a_model else ""),
-                decision="NOT_APPLICABLE",
+                decision="INSUFFICIENT_INPATIENT_DATA",
                 has_sufficient_data=False,
                 is_anomaly=False,
                 anomaly_score=0.0,

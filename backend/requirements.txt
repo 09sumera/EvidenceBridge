@@ -21,5 +21,10 @@ python-dotenv>=1.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 
+# Model 6: Image-Based Medical Document AI (MobileNetV3-Small)
+onnxruntime>=1.18.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
 bcrypt>=4.1.0
 PyJWT>=2.8.0

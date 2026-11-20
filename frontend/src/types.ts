@@ -7,6 +7,7 @@ export type SourceType =
   | 'clinical_note'
   | 'patient_report'
   | 'hospital_bill'
+  | 'prescription'
   | 'forum_post'
   | 'other'
 
@@ -792,9 +793,12 @@ export interface UnifiedAuditReport {
 }
 
 export interface Model6PredictionResult {
+  predicted_class?: string
   document_category: string
   category_label: string
+  confidence?: number
   model_score: number
+  probabilities?: Record<string, number>
   all_probabilities?: Record<string, number>
   is_supported: boolean
   suggested_source_type: SourceType

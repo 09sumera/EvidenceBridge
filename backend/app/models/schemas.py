@@ -14,6 +14,7 @@ class SourceType(str, Enum):
     CLINICAL_NOTE = "clinical_note"
     PATIENT_REPORT = "patient_report"
     HOSPITAL_BILL = "hospital_bill"
+    PRESCRIPTION = "prescription"
     FORUM_POST = "forum_post"
     OTHER = "other"
 
@@ -1371,51 +1372,85 @@ class UnifiedAuditReport(BaseModel):
 
 
 # ============================================================================
-# Model 6: Image-Based Medical Document AI Schemas (ResNet18)
+# Model 6: Image-Based Medical Document AI Schemas (MobileNetV3-Small)
 # ============================================================================
 
 class Model6DocumentCategory(str, Enum):
-    PRESCRIPTION = "prescription"
+    DISCHARGE_SUMMARY = "discharge_summary"
     LABORATORY_REPORT = "laboratory_report"
+    MEDICAL_BILLING = "medical_billing"
+    OTHER_UNSUPPORTED = "other_unsupported"
+    PRESCRIPTION = "prescription"
+    # Backward compatibility aliases
     INVOICE_OR_RECEIPT = "invoice_or_receipt"
     UNCERTAIN = "uncertain_or_unsupported"
 
 
 class Model6PredictionResult(BaseModel):
     """
-    Inference result from Model 6 (Image-Based Medical Document AI - ResNet18).
-    Classifies raw uploaded or camera-captured document images into prescription,
-    laboratory report, or invoice/receipt.
+    Inference result from Model 6 (MobileNetV3-Small Document Image Classifier).
+    Classifies raw uploaded or camera-captured document images into:
+    - discharge_summary
+    - laboratory_report
+    - medical_billing
+    - other_unsupported
+    - prescription
     """
     model_config = ConfigDict(extra="ignore")
 
+    predicted_class: Optional[str] = Field(
+        default=None,
+        description="Class predicted by Model 6 ONNX model"
+    )
     document_category: str = Field(
         ...,
-        description="'prescription', 'laboratory_report', 'invoice_or_receipt', or 'uncertain_or_unsupported'"
+        description="'discharge_summary', 'laboratory_report', 'medical_billing', 'prescription', or 'other_unsupported'"
     )
     category_label: str = Field(
         ...,
-        description="Human-friendly label: 'Medical Invoice / Receipt', 'Prescription', 'Laboratory Report', or 'Uncertain Document Type'"
+        description="Human-friendly label: 'Discharge Summary', 'Laboratory Report', 'Medical Billing / Invoice', 'Prescription', 'Unsupported Document', etc."
+    )
+    confidence: Optional[float] = Field(
+        default=None,
+        description="Top prediction confidence (0.0 to 1.0)"
     )
     model_score: float = Field(
         ...,
         description="Softmax probability score of the predicted class (0.0 to 1.0)"
     )
+    probabilities: dict[str, float] = Field(
+        default_factory=dict,
+        description="Softmax probability distribution across the 5 trained classes"
+    )
     all_probabilities: dict[str, float] = Field(
         default_factory=dict,
-        description="Softmax probability distribution across all 3 trained classes"
+        description="Softmax probability distribution across classes including legacy aliases"
     )
     is_supported: bool = Field(
         default=True,
-        description="True if model confidence satisfies operational threshold and category is recognized"
+        description="True if model confidence satisfies operational threshold and category is a supported medical document"
     )
     suggested_source_type: str = Field(
         default="clinical_note",
-        description="Mapped EvidenceBridge source_type ('hospital_bill', 'prescription', or 'clinical_note')"
+        description="Mapped EvidenceBridge source_type ('hospital_bill', 'prescription', 'clinical_note', or 'other')"
     )
-    model_name: str = "EvidenceBridge Model 6 (ResNet18 Document AI)"
+    model_name: str = "EvidenceBridge Model 6 (MobileNetV3-Small Document AI)"
     message: Optional[str] = None
     processed_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_compatibility_fields(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if "predicted_class" not in values and "document_category" in values:
+                values["predicted_class"] = values["document_category"]
+            if "confidence" not in values and "model_score" in values:
+                values["confidence"] = values["model_score"]
+            if "model_score" not in values and "confidence" in values:
+                values["model_score"] = values["confidence"]
+            if "document_category" not in values and "predicted_class" in values:
+                values["document_category"] = values["predicted_class"]
+        return values
 
 
 class DocumentImageProcessResponse(BaseModel):
